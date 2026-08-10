@@ -39,10 +39,12 @@ import {
 } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import {
+  buildFileDiffRenderKey,
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../../lib/diffRendering";
+import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
@@ -2425,11 +2427,120 @@ function liveWorkEntryLabel(
 
   return workEntryPreview(workEntry, workspaceRoot) ?? toolWorkEntryHeading(workEntry);
 }
+/**
+ * Counts add/delete lines straight off the unified diff text. Cheap enough to
+ * run for every collapsed row, unlike parsing the patch into hunks.
+ */
+function summarizeUnifiedDiffStat(patch: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    // Only count inside a hunk body, where the first character is always the
+    // change marker. Testing markers before the first `@@` would misread the
+    // `---`/`+++` header, and prefix-matching `---` would drop a deleted line
+    // whose own text starts with `--`.
+    if (!inHunk) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+    } else if (line.startsWith("-")) {
+      deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}
+
+/**
+ * Rewrites the absolute path in the patch header to the workspace-relative one
+ * so the diff header matches the rest of the timeline's path display. Only the
+ * header lines are touched; hunk bodies are left byte-for-byte intact.
+ */
+function relativizePatchHeader(patch: string, absolutePath: string, displayPath: string): string {
+  if (displayPath === absolutePath) {
+    return patch;
+  }
+  const lines = patch.split("\n");
+  const headerLineCount = Math.min(lines.length, 4);
+  for (let index = 0; index < headerLineCount; index += 1) {
+    const line = lines[index];
+    if (line === undefined || !/^(diff --git |--- |\+\+\+ )/.test(line)) {
+      continue;
+    }
+    lines[index] = line.split(absolutePath).join(displayPath);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Inline diff for a completed file edit. Replaces what used to be a serialized
+ * dump of the tool input with the actual change.
+ */
+const ToolCallFileDiff = memo(function ToolCallFileDiff(props: {
+  fileChange: NonNullable<TimelineWorkEntry["fileChange"]>;
+  workspaceRoot: string | undefined;
+}) {
+  const { fileChange, workspaceRoot } = props;
+  const { resolvedTheme } = use(TimelineRowCtx);
+  const displayPath = formatWorkspaceRelativePath(fileChange.path, workspaceRoot);
+  const renderablePatch = useMemo(
+    () =>
+      getRenderablePatch(
+        relativizePatchHeader(fileChange.patch, fileChange.path, displayPath),
+        "tool-call-diff",
+      ),
+    [displayPath, fileChange.patch, fileChange.path],
+  );
+
+  if (!renderablePatch) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1">
+      {renderablePatch.kind === "files" ? (
+        renderablePatch.files.map((fileDiff) => (
+          <FileDiff
+            key={buildFileDiffRenderKey(fileDiff)}
+            fileDiff={fileDiff}
+            options={{
+              collapsed: false,
+              diffStyle: "unified",
+              theme: resolveDiffThemeName(resolvedTheme),
+            }}
+          />
+        ))
+      ) : (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-secondary-label">
+          {renderablePatch.text}
+        </pre>
+      )}
+      {(fileChange.truncated || fileChange.approximate) && (
+        <p className="text-[10px] text-muted-foreground">
+          {fileChange.truncated ? "Diff truncated." : null}
+          {fileChange.truncated && fileChange.approximate ? " " : null}
+          {fileChange.approximate ? "Line numbers are approximate." : null}
+        </p>
+      )}
+    </div>
+  );
+});
 
 function buildToolCallExpandedBody(
   workEntry: TimelineWorkEntry,
   workspaceRoot: string | undefined,
 ): string | null {
+  // A file edit renders its diff instead: the detail string is a serialized
+  // dump of the same tool input the diff already shows, and the changed-file
+  // list is redundant with the diff header.
+  if (workEntry.fileChange) {
+    return null;
+  }
   const blocks: string[] = [];
   if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
     blocks.push(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
@@ -2620,15 +2731,39 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   isExpandedToolGroupEntry: boolean;
 }) {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry } = props;
-  const [expanded, setExpanded] = useState(false);
+  // File edits open expanded: the diff is the point of the row, and the
+  // collapsed line alone (path + stat) rarely answers "what changed?". Every
+  // other tool call stays collapsed so the timeline stays scannable.
+  //
+  // The initializer covers a row mounted after the edit completed (scrollback,
+  // virtualized remount); the effect below covers the live case, where the row
+  // is created at tool.started and the diff only lands on tool.completed.
+  const [expanded, setExpanded] = useState(() => props.workEntry.fileChange !== undefined);
+  const autoExpandedDiff = useRef(props.workEntry.fileChange !== undefined);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const showFailedIndicator = workEntryDisplayIndicatesToolFailure(workEntry);
   const entryIconName =
     showWarningIndicator || showFailedIndicator ? "x" : workEntryIconName(workEntry);
-  const displayText = workEntryPreview(workEntry, workspaceRoot) ?? toolWorkEntryHeading(workEntry);
+  const fileChange = workEntry.fileChange;
+  // File edits preview as the edited path, never the serialized tool input.
+  const displayText = fileChange
+    ? formatWorkspaceRelativePath(fileChange.path, workspaceRoot)
+    : (workEntryPreview(workEntry, workspaceRoot) ?? toolWorkEntryHeading(workEntry));
+  const fileChangeStat = useMemo(
+    () => (fileChange ? summarizeUnifiedDiffStat(fileChange.patch) : null),
+    [fileChange],
+  );
+  // Expand once, when the diff first arrives. Guarded by a ref so a manual
+  // collapse is never undone by a later re-render.
+  useEffect(() => {
+    if (fileChange && !autoExpandedDiff.current) {
+      autoExpandedDiff.current = true;
+      setExpanded(true);
+    }
+  }, [fileChange]);
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null;
+  const canExpand = expandedBody !== null || fileChange !== undefined;
   const showDestructiveRowStyle =
     showFailedIndicator &&
     (workEntry.sourceActivityKind === "runtime.error" || !workLogEntryIsToolLike(workEntry));
@@ -2697,6 +2832,14 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
               <span className={cn("min-w-0 flex-1 truncate", headingClass)}>{displayText}</span>
             </p>
           </div>
+          {fileChangeStat && hasNonZeroStat(fileChangeStat) ? (
+            <DiffStatLabel
+              additions={fileChangeStat.additions}
+              deletions={fileChangeStat.deletions}
+              layout="inline"
+              className="me-1.5 text-[11px]"
+            />
+          ) : null}
           <span
             className={cn(
               "flex size-4 shrink-0 items-center justify-center",
@@ -2713,13 +2856,18 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </span>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
+      {expanded && canExpand && (expandedBody || fileChange) ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
+          {fileChange ? (
+            <ToolCallFileDiff fileChange={fileChange} workspaceRoot={workspaceRoot} />
+          ) : null}
+          {expandedBody ? (
+            <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
+          ) : null}
         </div>
       ) : null}
     </div>

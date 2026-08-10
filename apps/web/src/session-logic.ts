@@ -61,6 +61,21 @@ export type WorkLogToolLifecycleStatus =
   | "declined"
   | "stopped";
 
+/**
+ * Renderable unified diff for a `file_change` tool call, built server-side from
+ * the provider's structured patch. Present only once the edit has completed.
+ */
+export interface WorkLogFileChange {
+  /** Absolute path as reported by the tool. */
+  path: string;
+  /** Unified diff including its `diff --git` header. */
+  patch: string;
+  /** The patch body was clipped to a size cap. */
+  truncated?: boolean;
+  /** Hunk line numbers were inferred, not reported by the provider. */
+  approximate?: boolean;
+}
+
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
@@ -75,6 +90,8 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   toolData?: unknown;
+  /** Inline diff for file edits; see {@link WorkLogFileChange}. */
+  fileChange?: WorkLogFileChange;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
@@ -960,6 +977,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.toolData = data.item;
     }
   }
+  if (itemType === "file_change") {
+    const fileChange = extractFileChange(payload);
+    if (fileChange) {
+      entry.fileChange = fileChange;
+    }
+  }
   if (itemType) {
     entry.itemType = itemType;
   }
@@ -1170,6 +1193,9 @@ function mergeDerivedWorkLogEntries(
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  // The diff only lands on tool.completed; keep it when a later event in the
+  // same collapse group carries none.
+  const fileChange = next.fileChange ?? previous.fileChange;
   return {
     ...previous,
     ...next,
@@ -1184,6 +1210,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(fileChange ? { fileChange } : {}),
   };
 }
 
@@ -1583,6 +1610,24 @@ function isCommandToolDetail(payload: Record<string, unknown> | null, heading: s
     title === "terminal" ||
     title === "ran command"
   );
+}
+
+function extractFileChange(payload: Record<string, unknown> | null): WorkLogFileChange | null {
+  const fileChange = asRecord(asRecord(payload?.data)?.fileChange);
+  if (!fileChange) {
+    return null;
+  }
+  const path = asTrimmedString(fileChange.path);
+  const patch = typeof fileChange.patch === "string" ? fileChange.patch : null;
+  if (!path || !patch || patch.trim().length === 0) {
+    return null;
+  }
+  return {
+    path,
+    patch,
+    ...(fileChange.truncated === true ? { truncated: true } : {}),
+    ...(fileChange.approximate === true ? { approximate: true } : {}),
+  };
 }
 
 function extractToolDetail(
