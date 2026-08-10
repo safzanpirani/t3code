@@ -207,3 +207,54 @@ describe("projectActivityPayload", () => {
     expect(projected.payload).toEqual(source.payload);
   });
 });
+
+/**
+ * The inline timeline diff is the only reason a file edit's patch crosses the
+ * wire. Slimming must keep it while still dropping the raw tool input it was
+ * derived from.
+ */
+describe("projectActivityPayload file-change diffs", () => {
+  const patch = ["diff --git a/src/app.ts b/src/app.ts", "@@ -1,1 +1,1 @@", "-a", "+b", ""].join(
+    "\n",
+  );
+
+  it("keeps the unified diff and drops the raw edit input", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "file_change",
+        data: {
+          toolName: "Edit",
+          input: { file_path: "/repo/src/app.ts", old_string: "a", new_string: "b" },
+          fileChange: { path: "/repo/src/app.ts", patch },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.fileChange).toEqual({ path: "/repo/src/app.ts", patch });
+    expect(data.input).toBeUndefined();
+  });
+
+  it("carries the truncated and approximate flags through", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "file_change",
+        data: {
+          fileChange: { path: "/repo/src/app.ts", patch, truncated: true, approximate: true },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.fileChange).toMatchObject({ truncated: true, approximate: true });
+  });
+
+  it("drops a malformed file change rather than forwarding a partial one", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "file_change",
+        data: { fileChange: { path: "/repo/src/app.ts", patch: "" } },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.fileChange).toBeUndefined();
+  });
+});
