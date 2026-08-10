@@ -51,7 +51,10 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+// Local fork build: a distinct bundle id keeps this install side-by-side with a
+// released T3 Code rather than having LaunchServices treat them as one app.
+// Workspace state still lives in ~/.t3, so both builds see the same threads.
+const DESKTOP_APP_ID = "com.t3tools.t3code.inlinediff";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
