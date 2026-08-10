@@ -330,6 +330,29 @@ function projectAcpContent(value: unknown): Record<string, unknown> | undefined 
 }
 
 /**
+ * Retains the renderable unified diff attached to a `file_change` tool call.
+ * Only the fields the inline diff row reads survive; anything else the adapter
+ * may attach is dropped so this stays a fixed-shape, size-bounded payload.
+ */
+function projectFileChange(value: unknown): Record<string, unknown> | undefined {
+  const fileChange = asRecord(value);
+  if (!fileChange) {
+    return undefined;
+  }
+  const path = asTrimmedString(fileChange.path);
+  const patch = typeof fileChange.patch === "string" ? fileChange.patch : null;
+  if (!path || !patch || patch.length === 0) {
+    return undefined;
+  }
+  return {
+    path,
+    patch,
+    ...(fileChange.truncated === true ? { truncated: true } : {}),
+    ...(fileChange.approximate === true ? { approximate: true } : {}),
+  };
+}
+
+/**
  * Removes activity payload fields that no current client reads while retaining
  * the full payload in persistence and the event store.
  */
@@ -380,6 +403,14 @@ export function projectActivityPayload(
   }
   if ("kind" in data) {
     projectedData.kind = data.kind;
+  }
+
+  // The unified diff for a file edit, which clients render inline in the
+  // timeline. Already size-capped where it is built; the raw tool input it was
+  // derived from is still dropped.
+  const fileChange = projectFileChange(data.fileChange);
+  if (fileChange) {
+    projectedData.fileChange = fileChange;
   }
 
   const rawOutput = projectRawOutput(data.rawOutput) ?? projectAcpContent(data.content);

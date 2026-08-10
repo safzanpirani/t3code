@@ -80,6 +80,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
+import { buildFileChangePatch } from "../fileChangePatch.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
   getClaudeModelCapabilities,
@@ -2757,10 +2758,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const [index, tool] = toolEntry;
       const itemStatus = toolResult.isError ? "failed" : "completed";
       const toolUseResult = readClaudeToolUseResult(message);
+      // File edits carry a renderable unified diff so clients can show the
+      // change inline instead of the serialized tool input.
+      const fileChangePatch =
+        tool.itemType === "file_change" && !toolResult.isError
+          ? buildFileChangePatch(tool.input, toolUseResult)
+          : undefined;
       const toolData = {
         toolName: tool.toolName,
         input: tool.input,
         result: toolResult.block,
+        ...(fileChangePatch ? { fileChange: fileChangePatch } : {}),
       };
 
       const updatedStamp = yield* makeEventStamp();

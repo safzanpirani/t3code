@@ -1467,6 +1467,41 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("surfaces the inline diff for a completed file-change tool call", () => {
+    const patch = ["diff --git a/src/app.ts b/src/app.ts", "@@ -3,1 +3,1 @@", "-a", "+b", ""].join(
+      "\n",
+    );
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        id: "edit-tool",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: { fileChange: { path: "/repo/src/app.ts", patch, approximate: true } },
+        },
+      }),
+    ]);
+
+    expect(entry?.fileChange).toEqual({ path: "/repo/src/app.ts", patch, approximate: true });
+  });
+
+  it("ignores a file change carrying no usable patch", () => {
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        id: "edit-tool-empty",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: { fileChange: { path: "/repo/src/app.ts", patch: "   " } },
+        },
+      }),
+    ]);
+
+    expect(entry?.fileChange).toBeUndefined();
+  });
+
   it("extracts changed file paths for file-change tool activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
