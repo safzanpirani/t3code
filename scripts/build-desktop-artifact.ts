@@ -1120,6 +1120,8 @@ ${associatedDomains}
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>
 `;
@@ -2133,6 +2135,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [...DESKTOP_FILE_EXCLUSIONS, ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : [])],
+    asarUnpack: [
+      "**/node_modules/transcribe-cpp/**/*",
+      "**/node_modules/@transcribe-cpp/**/*",
+      "**/node_modules/koffi/**/*",
+      "**/node_modules/@picovoice/pvrecorder-node/**/*",
+    ],
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -2167,6 +2175,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      extendInfo: {
+        NSMicrophoneUsageDescription:
+          "T3 Code uses your microphone for local voice input. Audio is processed on this device.",
+      },
       protocols: [
         {
           name: "T3 Code",

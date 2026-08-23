@@ -137,6 +137,9 @@ import {
   submitComposerDraft,
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
+import { ComposerSpeechButton } from "./ComposerSpeechButton";
+import { formatSpeechInsertion } from "../../speech/speechInsertion";
+import { useDesktopSpeechInput } from "../../speech/useDesktopSpeechInput";
 
 type ComposerCommandMenuPosition = {
   bottom: number;
@@ -1779,6 +1782,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerTerminalContexts, promptRef]);
+
+  const insertSpeechTranscript = useCallback(
+    (text: string) => {
+      const snapshot = readComposerSnapshot();
+      const replacement = formatSpeechInsertion(snapshot.value, snapshot.expandedCursor, text);
+      if (!replacement) return;
+      applyPromptReplacement(snapshot.expandedCursor, snapshot.expandedCursor, replacement);
+    },
+    [applyPromptReplacement, readComposerSnapshot],
+  );
+  const speechInput = useDesktopSpeechInput(insertSpeechTranscript);
 
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number; expandedCursor: number };
@@ -3555,6 +3569,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 >
                   {showMobilePendingAnswerActions ? null : inlineTasksBadge}
                   {showMobilePendingAnswerActions ? null : inlineStashBadge}
+                  {speechInput.available ? (
+                    <ComposerSpeechButton
+                      status={speechInput.status}
+                      progress={speechInput.progress}
+                      level={speechInput.level}
+                      disabled={
+                        isConnecting || projectSelectionRequired || pendingUserInputs.length > 0
+                      }
+                      onStart={() => void speechInput.start()}
+                      onStop={() => void speechInput.stop()}
+                      onCancel={() => void speechInput.cancel()}
+                    />
+                  ) : null}
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
                     activeContextWindow={activeContextWindow}
