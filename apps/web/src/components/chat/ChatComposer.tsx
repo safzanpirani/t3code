@@ -1792,7 +1792,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [applyPromptReplacement, readComposerSnapshot],
   );
-  const speechInput = useDesktopSpeechInput(insertSpeechTranscript);
+  const speechInput = useDesktopSpeechInput(
+    insertSpeechTranscript,
+    JSON.stringify(composerDraftTarget),
+  );
 
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number; expandedCursor: number };
