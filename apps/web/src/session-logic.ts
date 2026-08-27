@@ -66,11 +66,13 @@ export type WorkLogToolLifecycleStatus =
 
 /**
  * Renderable unified diff for a `file_change` tool call, built server-side from
- * the provider's structured patch. Present only once the edit has completed.
+ * the provider's structured patch. Present once the provider reports the edit.
  */
 export interface WorkLogFileChange {
   /** Absolute path as reported by the tool. */
   path: string;
+  /** Every changed path when one tool call updates multiple files. */
+  paths?: ReadonlyArray<string>;
   /** Unified diff including its `diff --git` header. */
   patch: string;
   /** The patch body was clipped to a size cap. */
@@ -1679,8 +1681,18 @@ function extractFileChange(payload: Record<string, unknown> | null): WorkLogFile
   if (!path || !patch || patch.trim().length === 0) {
     return null;
   }
+  const paths = Array.isArray(fileChange.paths)
+    ? Array.from(
+        new Set(
+          fileChange.paths
+            .map(asTrimmedString)
+            .filter((candidate): candidate is string => candidate !== null),
+        ),
+      )
+    : [];
   return {
     path,
+    ...(paths.length > 1 ? { paths } : {}),
     patch,
     ...(fileChange.truncated === true ? { truncated: true } : {}),
     ...(fileChange.approximate === true ? { approximate: true } : {}),

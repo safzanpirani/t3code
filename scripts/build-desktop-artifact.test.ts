@@ -13,6 +13,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   BundleNotSelfContainedError,
   BuildCommandFailedError,
+  DesktopArtifactInsufficientDiskSpaceError,
   DesktopDmgBackgroundSourceMissingError,
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
@@ -24,12 +25,14 @@ import {
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
+  MINIMUM_DESKTOP_ARTIFACT_FREE_BYTES,
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
+  prependWorkspaceBinToPath,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
@@ -48,6 +51,7 @@ import {
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
   resolvePackageManagerUserAgent,
+  requireDesktopArtifactFreeSpace,
   stageLinuxIconSize,
   stageDesktopDmgBackground,
   stageResourceMonitor,
@@ -153,13 +157,38 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("fails early when desktop packaging does not have enough free disk space", () =>
+    Effect.gen(function* () {
+      const failure = yield* requireDesktopArtifactFreeSpace({
+        checkedPath: "/build-volume",
+        availableBytes: 128 * 1024 * 1024,
+      }).pipe(Effect.flip);
+
+      assert.instanceOf(failure, DesktopArtifactInsufficientDiskSpaceError);
+      assert.equal(failure.requiredBytes, MINIMUM_DESKTOP_ARTIFACT_FREE_BYTES);
+      assert.match(failure.message, /needs at least 1\.5 GiB free/u);
+      assert.match(failure.message, /only 0\.1 GiB is available/u);
+    }),
+  );
+
+  it("prepends the workspace binary directory without dropping the caller environment", () => {
+    const environment = prependWorkspaceBinToPath("/workspace", {
+      PATH: "/usr/bin:/bin",
+      T3CODE_TEST_VALUE: "preserved",
+    });
+
+    assert.match(environment.PATH ?? "", /^\/workspace\/node_modules\/\.bin[;:]/u);
+    assert.match(environment.PATH ?? "", /\/usr\/bin:\/bin$/u);
+    assert.equal(environment.T3CODE_TEST_VALUE, "preserved");
+  });
+
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Inline Diff)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
   });
 
@@ -509,7 +538,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/node_modules/.bin/**",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "T3 Code (Alpha) 1.2.3 Installer",
+        title: "T3 Code (Inline Diff) 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 540, height: 412 },
         contents: [
@@ -1074,7 +1103,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "com.t3tools.t3code.inlinediff",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1094,7 +1123,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code.inlinediff</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -1189,7 +1218,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "com.t3tools.t3code.inlinediff");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /\/scripts\/sign-macos\.ts$/);

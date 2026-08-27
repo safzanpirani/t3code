@@ -344,8 +344,18 @@ function projectFileChange(value: unknown): Record<string, unknown> | undefined 
   if (!path || !patch || patch.length === 0) {
     return undefined;
   }
+  const paths = Array.isArray(fileChange.paths)
+    ? Array.from(
+        new Set(
+          fileChange.paths
+            .map(asTrimmedString)
+            .filter((candidate): candidate is string => candidate !== null),
+        ),
+      )
+    : [];
   return {
     path,
+    ...(paths.length > 1 ? { paths } : {}),
     patch,
     ...(fileChange.truncated === true ? { truncated: true } : {}),
     ...(fileChange.approximate === true ? { approximate: true } : {}),

@@ -2443,22 +2443,22 @@ function summarizeUnifiedDiffStat(patch: string): { additions: number; deletions
 }
 
 /**
- * Rewrites the absolute path in the patch header to the workspace-relative one
- * so the diff header matches the rest of the timeline's path display. Only the
- * header lines are touched; hunk bodies are left byte-for-byte intact.
+ * Rewrites absolute paths in every patch header to workspace-relative paths.
+ * Only header lines are touched; hunk bodies are left byte-for-byte intact.
  */
-function relativizePatchHeader(patch: string, absolutePath: string, displayPath: string): string {
-  if (displayPath === absolutePath) {
+function relativizePatchHeaders(patch: string, workspaceRoot: string | undefined): string {
+  const root = workspaceRoot?.replace(/\/+$/u, "");
+  if (!root) {
     return patch;
   }
+  const prefix = `${root}/`;
   const lines = patch.split("\n");
-  const headerLineCount = Math.min(lines.length, 4);
-  for (let index = 0; index < headerLineCount; index += 1) {
+  for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (line === undefined || !/^(diff --git |--- |\+\+\+ )/.test(line)) {
+    if (line === undefined || !/^(diff --git |--- |\+\+\+ |rename from |rename to )/u.test(line)) {
       continue;
     }
-    lines[index] = line.split(absolutePath).join(displayPath);
+    lines[index] = line.split(prefix).join("");
   }
   return lines.join("\n");
 }
@@ -2473,14 +2473,10 @@ const ToolCallFileDiff = memo(function ToolCallFileDiff(props: {
 }) {
   const { fileChange, workspaceRoot } = props;
   const { resolvedTheme } = use(TimelineRowCtx);
-  const displayPath = formatWorkspaceRelativePath(fileChange.path, workspaceRoot);
   const renderablePatch = useMemo(
     () =>
-      getRenderablePatch(
-        relativizePatchHeader(fileChange.patch, fileChange.path, displayPath),
-        "tool-call-diff",
-      ),
-    [displayPath, fileChange.patch, fileChange.path],
+      getRenderablePatch(relativizePatchHeaders(fileChange.patch, workspaceRoot), "tool-call-diff"),
+    [fileChange.patch, workspaceRoot],
   );
 
   if (!renderablePatch) {
@@ -2732,9 +2728,12 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const entryIconName =
     showWarningIndicator || showFailedIndicator ? "x" : workEntryIconName(workEntry);
   const fileChange = workEntry.fileChange;
+  const fileChangePaths = fileChange?.paths ?? (fileChange ? [fileChange.path] : []);
   // File edits preview as the edited path, never the serialized tool input.
   const displayText = fileChange
-    ? formatWorkspaceRelativePath(fileChange.path, workspaceRoot)
+    ? fileChangePaths.length > 1
+      ? `${fileChangePaths.length.toLocaleString()} files changed`
+      : formatWorkspaceRelativePath(fileChange.path, workspaceRoot)
     : (workEntryPreview(workEntry, workspaceRoot) ?? toolWorkEntryHeading(workEntry));
   const fileChangeStat = useMemo(
     () => (fileChange ? summarizeUnifiedDiffStat(fileChange.patch) : null),

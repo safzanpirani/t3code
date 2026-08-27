@@ -28,6 +28,8 @@ const MAX_SYNTHESIZED_SIDE_CHARS = 48_000;
 export interface FileChangePatch {
   /** Absolute path as reported by the tool; clients relativize for display. */
   readonly path: string;
+  /** Every changed path when one tool call updates multiple files. */
+  readonly paths?: ReadonlyArray<string>;
   /** Unified diff, `diff --git` header included. */
   readonly patch: string;
   /** Set when the patch body was clipped to fit the size cap. */
@@ -45,6 +47,17 @@ interface StructuredPatchHunk {
   readonly newStart: number;
   readonly newLines: number;
   readonly lines: ReadonlyArray<string>;
+}
+
+export type CodexPatchChangeKind =
+  | { readonly type: "add" }
+  | { readonly type: "delete" }
+  | { readonly type: "update"; readonly move_path?: string | null };
+
+export interface CodexFileUpdateChange {
+  readonly path: string;
+  readonly kind: CodexPatchChangeKind;
+  readonly diff: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -102,11 +115,13 @@ function readStructuredPatch(value: unknown): ReadonlyArray<StructuredPatchHunk>
   return hunks;
 }
 
-function gitHeader(path: string, mode: "modify" | "create"): string {
+function gitHeader(path: string, mode: "modify" | "create" | "delete"): string {
   const quoted = path.replace(/\n/g, " ");
   const lines = [`diff --git a/${quoted} b/${quoted}`];
   if (mode === "create") {
     lines.push("new file mode 100644", "--- /dev/null", `+++ b/${quoted}`);
+  } else if (mode === "delete") {
+    lines.push("deleted file mode 100644", `--- a/${quoted}`, "+++ /dev/null");
   } else {
     lines.push(`--- a/${quoted}`, `+++ b/${quoted}`);
   }
@@ -125,7 +140,7 @@ function formatHunkHeader(hunk: StructuredPatchHunk): string {
 function renderStructuredPatch(
   path: string,
   hunks: ReadonlyArray<StructuredPatchHunk>,
-  mode: "modify" | "create",
+  mode: "modify" | "create" | "delete",
 ): string {
   const blocks = hunks.map((hunk) => [formatHunkHeader(hunk), ...hunk.lines].join("\n"));
   return `${gitHeader(path, mode)}\n${blocks.join("\n")}\n`;
@@ -170,6 +185,74 @@ function buildCreatePatch(path: string, content: string): FileChangePatch {
     patch: renderStructuredPatch(path, [hunk], "create"),
     ...(clipped.truncated ? { truncated: true } : {}),
   };
+}
+
+/** All-deletions patch for a file Codex removed. */
+function buildDeletePatch(path: string, content: string): FileChangePatch {
+  const clipped = clipForSynthesis(content);
+  const lines = splitLines(clipped.text);
+  const hunk: StructuredPatchHunk = {
+    oldStart: 1,
+    oldLines: lines.length,
+    newStart: 0,
+    newLines: 0,
+    lines: lines.map((line) => `-${line}`),
+  };
+  return {
+    path,
+    patch: renderStructuredPatch(path, [hunk], "delete"),
+    ...(clipped.truncated ? { truncated: true } : {}),
+  };
+}
+
+function ensureTrailingNewline(value: string): string {
+  const normalized = value.replace(/\r\n/g, "\n");
+  return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+}
+
+function renderCodexUpdate(change: CodexFileUpdateChange): string | null {
+  const oldPath = change.path.replace(/\n/g, " ");
+  const newPath = change.kind.type === "update" ? change.kind.move_path?.replace(/\n/g, " ") : null;
+  const diff = ensureTrailingNewline(change.diff);
+
+  // Future app-server versions may return a complete patch rather than the
+  // raw hunks emitted today. Do not wrap an already renderable patch twice.
+  if (diff.startsWith("diff --git ")) {
+    return diff;
+  }
+  if (change.diff.length === 0 && !newPath) {
+    return null;
+  }
+  if (!newPath) {
+    return `${gitHeader(oldPath, "modify")}\n${diff}`;
+  }
+
+  return [
+    `diff --git a/${oldPath} b/${newPath}`,
+    `rename from ${oldPath}`,
+    `rename to ${newPath}`,
+    `--- a/${oldPath}`,
+    `+++ b/${newPath}`,
+    diff,
+  ].join("\n");
+}
+
+function renderCodexChange(change: CodexFileUpdateChange): FileChangePatch | undefined {
+  const path = asNonEmptyString(change.path);
+  if (!path) {
+    return undefined;
+  }
+  switch (change.kind.type) {
+    case "add":
+      return buildCreatePatch(path, change.diff);
+    case "delete":
+      return buildDeletePatch(path, change.diff);
+    case "update": {
+      const patch = renderCodexUpdate(change);
+      const displayPath = asNonEmptyString(change.kind.move_path) ?? path;
+      return patch ? { path: displayPath, patch } : undefined;
+    }
+  }
 }
 
 /**
@@ -316,4 +399,29 @@ export function buildFileChangePatch(
   }
 
   return undefined;
+}
+
+/**
+ * Converts Codex app-server's native file-change item into the same bounded
+ * unified-patch payload used by Claude tool results. Codex reports exact hunks
+ * for updates and complete file bodies for adds/deletes, so none of these
+ * patches are approximate.
+ */
+export function buildCodexFileChangePatch(
+  changes: ReadonlyArray<CodexFileUpdateChange>,
+): FileChangePatch | undefined {
+  const rendered = changes
+    .map(renderCodexChange)
+    .filter((change): change is FileChangePatch => change !== undefined);
+  if (rendered.length === 0) {
+    return undefined;
+  }
+
+  const paths = Array.from(new Set(rendered.map((change) => change.path)));
+  return applyPatchSizeCap({
+    path: paths[0]!,
+    ...(paths.length > 1 ? { paths } : {}),
+    patch: rendered.map((change) => ensureTrailingNewline(change.patch)).join(""),
+    ...(rendered.some((change) => change.truncated) ? { truncated: true } : {}),
+  });
 }

@@ -3,6 +3,7 @@
 
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
 
 import {
   createPackageWithOptions,
@@ -51,6 +52,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
+export const MINIMUM_DESKTOP_ARTIFACT_FREE_BYTES = 1_536 * 1024 * 1024;
 // Local fork build: a distinct bundle id keeps this install side-by-side with a
 // released T3 Code rather than having LaunchServices treat them as one app.
 // Workspace state still lives in ~/.t3, so both builds see the same threads.
@@ -519,6 +521,50 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedErrorClas
   override get message(): string {
     return `Build completed but no files were produced in ${this.distPath}`;
   }
+}
+
+export class DesktopArtifactInsufficientDiskSpaceError extends Schema.TaggedErrorClass<DesktopArtifactInsufficientDiskSpaceError>()(
+  "DesktopArtifactInsufficientDiskSpaceError",
+  {
+    checkedPath: Schema.String,
+    availableBytes: Schema.Number,
+    requiredBytes: Schema.Number,
+  },
+) {
+  override get message(): string {
+    const availableGiB = (this.availableBytes / 1024 ** 3).toFixed(1);
+    const requiredGiB = (this.requiredBytes / 1024 ** 3).toFixed(1);
+    return `Desktop artifact build needs at least ${requiredGiB} GiB free at ${this.checkedPath}; only ${availableGiB} GiB is available.`;
+  }
+}
+
+export const requireDesktopArtifactFreeSpace = Effect.fn("desktopArtifact.requireFreeSpace")(
+  function* (input: {
+    readonly checkedPath: string;
+    readonly availableBytes: number;
+    readonly requiredBytes?: number;
+  }) {
+    const requiredBytes = input.requiredBytes ?? MINIMUM_DESKTOP_ARTIFACT_FREE_BYTES;
+    if (input.availableBytes < requiredBytes) {
+      return yield* new DesktopArtifactInsufficientDiskSpaceError({
+        checkedPath: input.checkedPath,
+        availableBytes: input.availableBytes,
+        requiredBytes,
+      });
+    }
+  },
+);
+
+export function prependWorkspaceBinToPath(
+  repoRoot: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const workspaceBin = NodePath.join(repoRoot, "node_modules", ".bin");
+  const existingPath = environment.PATH?.trim();
+  return {
+    ...environment,
+    PATH: existingPath ? `${workspaceBin}${NodePath.delimiter}${existingPath}` : workspaceBin,
+  };
 }
 
 export class WslNodePtyPrebuildMissingError extends Schema.TaggedErrorClass<WslNodePtyPrebuildMissingError>()(
@@ -1659,22 +1705,22 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
       // stdin, a port, a lock) would otherwise hang release CI until the job
       // times out with nothing useful in the log.
       Effect.timeout(BUNDLE_SELF_CHECK_TIMEOUT),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: -1,
-            output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
-          }),
-        ),
-      ),
-      Effect.catchTag("BuildCommandFailedError", (error) =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: error.exitCode,
-            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
-          }),
-        ),
-      ),
+      Effect.catchTags({
+        TimeoutError: () =>
+          Effect.fail(
+            new BundleNotSelfContainedError({
+              exitCode: -1,
+              output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
+            }),
+          ),
+        BuildCommandFailedError: (error) =>
+          Effect.fail(
+            new BundleNotSelfContainedError({
+              exitCode: error.exitCode,
+              output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
+            }),
+          ),
+      }),
     );
   },
 );
@@ -2391,10 +2437,14 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   }
 
   yield* Effect.log("[desktop-artifact] Installing server sidecar runtime externals...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
+  const commandEnvironment = prependWorkspaceBinToPath(input.repoRoot);
+  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS], {
+    env: commandEnvironment,
+  });
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
       cwd: serverStageDir,
+      env: commandEnvironment,
       shell: installCommand.shell,
     }),
     { label: "vp install --prod (server sidecar)", verbose: input.verbose },
@@ -2684,6 +2734,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
+  const commandEnvironment = prependWorkspaceBinToPath(repoRoot);
+  const diskStats = yield* Effect.tryPromise(() => NodeFSP.statfs(repoRoot));
+  yield* requireDesktopArtifactFreeSpace({
+    checkedPath: repoRoot,
+    availableBytes: Number(diskStats.bavail) * Number(diskStats.bsize),
+  });
   const workspaceConfig = yield* readWorkspaceConfig();
   const workspaceCatalog = workspaceConfig.catalog ?? {};
   const workspaceOverrides = workspaceConfig.overrides ?? {};
@@ -2757,10 +2813,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
-    const spawnCommand = yield* resolveSpawnCommand("vp", ["run", "build:desktop"]);
+    const spawnCommand = yield* resolveSpawnCommand("vp", ["run", "build:desktop"], {
+      env: commandEnvironment,
+    });
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
+        env: commandEnvironment,
         shell: spawnCommand.shell,
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
@@ -3009,10 +3068,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
+  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS], {
+    env: commandEnvironment,
+  });
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
       cwd: stageAppDir,
+      env: commandEnvironment,
       shell: installCommand.shell,
     }),
     { label: "vp install --prod", verbose: options.verbose },
@@ -3043,9 +3105,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")
   // as enabled, so copy the host env and scrub empty values instead of relying
   // on `extendEnv` merging.
-  const buildEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-  };
+  const buildEnv = prependWorkspaceBinToPath(repoRoot);
   buildEnv.npm_config_user_agent = resolvePackageManagerUserAgent(rootPackageJson.packageManager);
   for (const [key, value] of Object.entries(buildEnv)) {
     if (value === "") {
