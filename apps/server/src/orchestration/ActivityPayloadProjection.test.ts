@@ -225,12 +225,20 @@ describe("projectActivityPayload file-change diffs", () => {
         data: {
           toolName: "Edit",
           input: { file_path: "/repo/src/app.ts", old_string: "a", new_string: "b" },
-          fileChange: { path: "/repo/src/app.ts", patch },
+          fileChange: {
+            path: "/repo/src/app.ts",
+            paths: ["/repo/src/app.ts", "/repo/src/other.ts"],
+            patch,
+          },
         },
       }),
     );
     const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
-    expect(data.fileChange).toEqual({ path: "/repo/src/app.ts", patch });
+    expect(data.fileChange).toEqual({
+      path: "/repo/src/app.ts",
+      paths: ["/repo/src/app.ts", "/repo/src/other.ts"],
+      patch,
+    });
     expect(data.input).toBeUndefined();
   });
 

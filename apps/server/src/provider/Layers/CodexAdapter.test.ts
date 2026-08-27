@@ -661,6 +661,93 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("attaches a renderable diff to Codex file-change lifecycle events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-file-complete"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("file_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "fileChange",
+            id: "file_1",
+            status: "completed",
+            changes: [
+              {
+                path: "/repo/.codex-toolcall-test.txt",
+                kind: { type: "add" },
+                diff: "balls\nballs\nballs\n",
+              },
+            ],
+          },
+        },
+      });
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      const data = firstEvent.value.payload.data as Record<string, unknown>;
+      const fileChange = data.fileChange as Record<string, unknown>;
+      NodeAssert.equal(fileChange.path, "/repo/.codex-toolcall-test.txt");
+      NodeAssert.match(String(fileChange.patch), /@@ -0,0 \+1,3 @@\n\+balls\n\+balls\n\+balls/u);
+    }),
+  );
+
+  it.effect("maps live Codex patch updates to an inline multi-file diff", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-file-patch-updated"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/fileChange/patchUpdated",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("file_1"),
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "file_1",
+          changes: [
+            { path: "/repo/a.txt", kind: { type: "add" }, diff: "a\n" },
+            {
+              path: "/repo/b.txt",
+              kind: { type: "update", move_path: null },
+              diff: "@@ -1,1 +1,1 @@\n-before\n+after\n",
+            },
+          ],
+        },
+      });
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.updated") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.payload.itemType, "file_change");
+      const data = firstEvent.value.payload.data as Record<string, unknown>;
+      const fileChange = data.fileChange as Record<string, unknown>;
+      NodeAssert.deepStrictEqual(fileChange.paths, ["/repo/a.txt", "/repo/b.txt"]);
+      NodeAssert.equal(String(fileChange.patch).match(/^diff --git /gmu)?.length, 2);
+    }),
+  );
+
   it.effect("labels MCP lifecycle entries with server and tool names", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

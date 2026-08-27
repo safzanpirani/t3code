@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { buildFileChangePatch } from "./fileChangePatch.ts";
+import { buildCodexFileChangePatch, buildFileChangePatch } from "./fileChangePatch.ts";
 
 const FILE = "/repo/src/app.ts";
 
@@ -162,6 +162,93 @@ describe("buildFileChangePatch falling back to the tool input", () => {
 
     expect(patch?.path).toBe("/repo/nb.ipynb");
     expect(patch?.patch).toContain("+print(1)");
+  });
+});
+
+describe("buildCodexFileChangePatch", () => {
+  it("renders the complete body of an added file from a real app-server item", () => {
+    const patch = buildCodexFileChangePatch([
+      {
+        path: "/repo/.codex-toolcall-test.txt",
+        kind: { type: "add" },
+        diff: "balls\nballs\nballs\n",
+      },
+    ]);
+
+    expect(patch).toEqual({
+      path: "/repo/.codex-toolcall-test.txt",
+      patch: [
+        "diff --git a//repo/.codex-toolcall-test.txt b//repo/.codex-toolcall-test.txt",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b//repo/.codex-toolcall-test.txt",
+        "@@ -0,0 +1,3 @@",
+        "+balls",
+        "+balls",
+        "+balls",
+        "",
+      ].join("\n"),
+    });
+  });
+
+  it("renders a deleted file as removals", () => {
+    const patch = buildCodexFileChangePatch([
+      { path: "/repo/old.txt", kind: { type: "delete" }, diff: "old\ncontent\n" },
+    ]);
+
+    expect(patch?.patch).toContain("deleted file mode 100644");
+    expect(patch?.patch).toContain("@@ -1,2 +0,0 @@\n-old\n-content\n");
+  });
+
+  it("wraps Codex update hunks with a renderable file header", () => {
+    const patch = buildCodexFileChangePatch([
+      {
+        path: "/repo/src/app.ts",
+        kind: { type: "update", move_path: null },
+        diff: "@@ -4,2 +4,2 @@\n-old\n+new\n context\n",
+      },
+    ]);
+
+    expect(patch?.patch).toBe(
+      [
+        "diff --git a//repo/src/app.ts b//repo/src/app.ts",
+        "--- a//repo/src/app.ts",
+        "+++ b//repo/src/app.ts",
+        "@@ -4,2 +4,2 @@",
+        "-old",
+        "+new",
+        " context",
+        "",
+      ].join("\n"),
+    );
+    expect(patch?.approximate).toBeUndefined();
+  });
+
+  it("keeps every file in a multi-file Codex tool call", () => {
+    const patch = buildCodexFileChangePatch([
+      { path: "/repo/a.txt", kind: { type: "add" }, diff: "a\n" },
+      {
+        path: "/repo/b.txt",
+        kind: { type: "update" },
+        diff: "@@ -1,1 +1,1 @@\n-before\n+after\n",
+      },
+    ]);
+
+    expect(patch?.paths).toEqual(["/repo/a.txt", "/repo/b.txt"]);
+    expect(patch?.patch.match(/^diff --git /gmu)).toHaveLength(2);
+  });
+
+  it("renders a moved file using the destination as its display path", () => {
+    const patch = buildCodexFileChangePatch([
+      {
+        path: "/repo/old.ts",
+        kind: { type: "update", move_path: "/repo/new.ts" },
+        diff: "@@ -1,1 +1,1 @@\n-old\n+new\n",
+      },
+    ]);
+
+    expect(patch?.path).toBe("/repo/new.ts");
+    expect(patch?.patch).toContain("rename from /repo/old.ts\nrename to /repo/new.ts");
   });
 });
 

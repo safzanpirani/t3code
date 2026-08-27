@@ -64,6 +64,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import { buildCodexFileChangePatch } from "../fileChangePatch.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -476,6 +477,8 @@ function mapItemLifecycle(
   }
 
   const detail = itemDetail(itemType, item);
+  const fileChange =
+    item.type === "fileChange" ? buildCodexFileChangePatch(item.changes) : undefined;
   const status =
     lifecycle === "item.started"
       ? "inProgress"
@@ -493,7 +496,9 @@ function mapItemLifecycle(
       ...(status ? { status } : {}),
       ...(itemTitle(itemType, item) ? { title: itemTitle(itemType, item) } : {}),
       ...(detail ? { detail } : {}),
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      ...(event.payload !== undefined
+        ? { data: fileChange ? { ...payload, fileChange } : event.payload }
+        : {}),
     },
   };
 }
@@ -1128,6 +1133,29 @@ function mapToRuntimeEvents(
     }
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
     return completed ? [completed] : [];
+  }
+
+  if (event.method === "item/fileChange/patchUpdated") {
+    const payload = readPayload(
+      EffectCodexSchema.V2FileChangePatchUpdatedNotification,
+      event.payload,
+    );
+    const fileChange = payload ? buildCodexFileChangePatch(payload.changes) : undefined;
+    if (!payload || !fileChange) {
+      return [];
+    }
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "item.updated",
+        payload: {
+          itemType: "file_change",
+          status: "inProgress",
+          title: "File change",
+          data: { ...payload, fileChange },
+        },
+      },
+    ];
   }
 
   if (

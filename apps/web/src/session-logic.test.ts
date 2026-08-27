@@ -1423,12 +1423,24 @@ describe("deriveWorkLogEntries", () => {
         summary: "File change",
         payload: {
           itemType: "file_change",
-          data: { fileChange: { path: "/repo/src/app.ts", patch, approximate: true } },
+          data: {
+            fileChange: {
+              path: "/repo/src/app.ts",
+              paths: ["/repo/src/app.ts", "/repo/src/other.ts"],
+              patch,
+              approximate: true,
+            },
+          },
         },
       }),
     ]);
 
-    expect(entry?.fileChange).toEqual({ path: "/repo/src/app.ts", patch, approximate: true });
+    expect(entry?.fileChange).toEqual({
+      path: "/repo/src/app.ts",
+      paths: ["/repo/src/app.ts", "/repo/src/other.ts"],
+      patch,
+      approximate: true,
+    });
   });
 
   it("ignores a file change carrying no usable patch", () => {
