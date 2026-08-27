@@ -6,6 +6,7 @@ import * as NodeUtil from "node:util";
 
 export interface T3CodePublicConfig {
   readonly clerkPublishableKey: string | undefined;
+  readonly deepgramApiKey: string | undefined;
   readonly clerkJwtTemplate: string | undefined;
   readonly clerkCliOAuthClientId: string | undefined;
   readonly relayUrl: string | undefined;
@@ -43,6 +44,12 @@ export function loadRepoEnv({
           T3CODE_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
           VITE_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
           EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
+        }
+      : {}),
+    ...(config.deepgramApiKey
+      ? {
+          T3CODE_DEEPGRAM_API_KEY: config.deepgramApiKey,
+          EXPO_PUBLIC_DEEPGRAM_API_KEY: config.deepgramApiKey,
         }
       : {}),
     ...(config.clerkJwtTemplate
@@ -110,6 +117,12 @@ export function resolvePublicConfig(...sources: readonly Environment[]): T3CodeP
       "T3CODE_CLERK_PUBLISHABLE_KEY",
       "VITE_CLERK_PUBLISHABLE_KEY",
       "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY",
+    ),
+    deepgramApiKey: firstNonEmpty(
+      sources,
+      "T3CODE_DEEPGRAM_API_KEY",
+      "DEEPGRAM_API_KEY",
+      "EXPO_PUBLIC_DEEPGRAM_API_KEY",
     ),
     clerkJwtTemplate: firstNonEmpty(
       sources,

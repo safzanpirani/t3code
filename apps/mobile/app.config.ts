@@ -223,6 +223,8 @@ const config: ExpoConfig = {
   android: {
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
+    // Voice input streams microphone audio to Deepgram for transcription.
+    permissions: ["android.permission.RECORD_AUDIO"],
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
       foregroundImage: variant.assets.androidAdaptiveForeground,

@@ -54,6 +54,7 @@ import {
 } from "../../components/ComposerToolbar";
 import { ControlPill } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { useVoiceInput } from "../speech/useVoiceInput";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -547,6 +548,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Handle command selection ──────────────────────────────
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
+  // Voice input appends to whatever is already drafted rather than replacing
+  // it, so dictating after typing does not discard the typed text.
+  const voice = useVoiceInput(
+    useCallback(
+      (text: string) => {
+        onChangeDraftMessage(
+          draftMessage.trim().length > 0 ? `${draftMessage.trimEnd()} ${text}` : text,
+        );
+      },
+      [draftMessage, onChangeDraftMessage],
+    ),
+  );
+
   const handleSend = useCallback(async () => {
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
@@ -886,6 +900,33 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   maxWidth={152}
                   onPress={openSettings}
                 />
+                {voice.supported ? (
+                  <ComposerToolbarButton
+                    accessibilityLabel={
+                      voice.state === "recording"
+                        ? "Stop and transcribe"
+                        : voice.state === "transcribing"
+                          ? "Transcribing"
+                          : voice.state === "unconfigured"
+                            ? "Voice input needs a Deepgram API key"
+                            : "Start voice input"
+                    }
+                    icon={voice.state === "recording" ? "stop.fill" : "mic.fill"}
+                    variant={
+                      voice.state === "recording"
+                        ? "danger"
+                        : voice.state === "error"
+                          ? "danger"
+                          : undefined
+                    }
+                    disabled={voice.state === "unconfigured" || voice.state === "transcribing"}
+                    onPress={() => {
+                      if (voice.state === "recording") void voice.stop();
+                      else void voice.start();
+                    }}
+                    showChevron={false}
+                  />
+                ) : null}
                 {showStopAction ? (
                   <ComposerToolbarButton
                     accessibilityLabel="Stop"
