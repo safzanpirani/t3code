@@ -1,4 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off - native model storage uses the resolved desktop data path.
 import type { DesktopSpeechEvent, DesktopSpeechStatus } from "@t3tools/contracts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
@@ -9,21 +8,11 @@ import * as Ref from "effect/Ref";
 
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import * as NodePath from "node:path";
 
-import * as DesktopAppIdentity from "../app/DesktopAppIdentity.ts";
+import { DeepgramFluxBackend } from "./DeepgramFluxBackend.ts";
 import { DesktopMicrophoneCapture } from "./DesktopMicrophoneCapture.ts";
 import { DesktopSpeechController } from "./DesktopSpeechController.ts";
-import { DesktopTranscriptionBackend } from "./DesktopTranscriptionBackend.ts";
-import {
-  SPEECH_MODEL,
-  downloadVerifiedModel,
-  isSpeechModelReady,
-  removeSpeechModel,
-  speechModelPath,
-} from "./speechModel.ts";
+import { deepgramApiKey } from "./deepgramKey.ts";
 
 type SpeechEventListener = (event: DesktopSpeechEvent) => Effect.Effect<void>;
 
@@ -46,7 +35,6 @@ export class DesktopSpeech extends Context.Service<
     readonly start: Effect.Effect<DesktopSpeechStatus, DesktopSpeechOperationError>;
     readonly stop: Effect.Effect<DesktopSpeechStatus, DesktopSpeechOperationError>;
     readonly cancel: Effect.Effect<DesktopSpeechStatus, DesktopSpeechOperationError>;
-    readonly removeModel: Effect.Effect<DesktopSpeechStatus, DesktopSpeechOperationError>;
     readonly subscribe: (listener: SpeechEventListener) => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("@t3tools/desktop/speech/DesktopSpeech") {}
@@ -58,14 +46,12 @@ function support(
   supported: boolean;
   reason?: string;
 } {
-  if (platform === "win32" && architecture === "arm64") {
-    return { supported: false, reason: "voice input is not available on Windows arm64 yet" };
-  }
   const tuple = `${platform}-${architecture}`;
   const supported = new Set([
     "darwin-arm64",
     "darwin-x64",
     "win32-x64",
+    "win32-arm64",
     "linux-x64",
     "linux-arm64",
   ]).has(tuple);
@@ -87,26 +73,10 @@ function attempt<A>(
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
   const architecture = yield* HostProcessArchitecture;
-  const appIdentity = yield* DesktopAppIdentity.DesktopAppIdentity;
-  const httpClient = yield* HttpClient.HttpClient;
   const availability = support(platform, architecture);
-  const directory = NodePath.join(yield* appIdentity.resolveUserDataPath, "speech", "models");
   const listeners = yield* Ref.make<ReadonlySet<SpeechEventListener>>(new Set());
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
-  const runPromise = Effect.runPromiseWith(context);
-
-  const requestModel = async (url: string, signal?: AbortSignal) => {
-    const response = await runPromise(
-      httpClient.get(url).pipe(Effect.flatMap(HttpClientResponse.filterStatusOk)),
-      signal ? { signal } : undefined,
-    );
-    return {
-      status: response.status,
-      headers: response.headers,
-      body: Stream.toAsyncIterableWith(response.stream, Context.empty()),
-    };
-  };
 
   const emit = (event: DesktopSpeechEvent): void => {
     runFork(
@@ -121,22 +91,20 @@ export const make = Effect.gen(function* () {
   const controller = new DesktopSpeechController({
     supported: availability.supported,
     ...(availability.reason ? { unsupportedReason: availability.reason } : {}),
-    modelPath: speechModelPath(directory),
-    modelReady: () => isSpeechModelReady(directory),
-    downloadModel: (onProgress) =>
-      downloadVerifiedModel({
-        directory,
-        filename: SPEECH_MODEL.filename,
-        url: SPEECH_MODEL.url,
-        size: SPEECH_MODEL.size,
-        sha256: SPEECH_MODEL.sha256,
-        request: requestModel,
-        onProgress,
-      }),
-    removeModel: () => removeSpeechModel(directory),
-    createCapture: () =>
-      new DesktopMicrophoneCapture((level, elapsedMs) => emit({ type: "level", level, elapsedMs })),
-    createBackend: (modelPath) => new DesktopTranscriptionBackend(modelPath),
+    configured: () => deepgramApiKey() !== undefined,
+    createCapture: (onFrame) =>
+      new DesktopMicrophoneCapture(
+        (level, elapsedMs) => emit({ type: "level", level, elapsedMs }),
+        onFrame,
+      ),
+    createBackend: () => {
+      const apiKey = deepgramApiKey();
+      if (!apiKey) throw new Error("no Deepgram API key is configured");
+      return new DeepgramFluxBackend({
+        apiKey,
+        onPartial: (text) => emit({ type: "partial", text }),
+      });
+    },
     emit,
   });
 
@@ -160,7 +128,6 @@ export const make = Effect.gen(function* () {
     start: attempt("start", () => controller.start()),
     stop: attempt("stop", () => controller.stop()),
     cancel: attempt("cancel", () => controller.cancel()),
-    removeModel: attempt("remove model", () => controller.removeModel()),
     subscribe,
   });
 });

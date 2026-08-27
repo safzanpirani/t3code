@@ -3575,7 +3575,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   {speechInput.available ? (
                     <ComposerSpeechButton
                       status={speechInput.status}
-                      progress={speechInput.progress}
                       level={speechInput.level}
                       disabled={
                         isConnecting || projectSelectionRequired || pendingUserInputs.length > 0

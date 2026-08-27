@@ -100,7 +100,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(SpeechIpc.startSpeech);
   yield* ipc.handle(SpeechIpc.stopSpeech);
   yield* ipc.handle(SpeechIpc.cancelSpeech);
-  yield* ipc.handle(SpeechIpc.removeSpeechModelMethod);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }

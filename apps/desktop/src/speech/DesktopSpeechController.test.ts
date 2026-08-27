@@ -1,111 +1,109 @@
-// @effect-diagnostics globalTimers:off - this test exercises the controller's native timer boundary.
+import type { DesktopSpeechEvent } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DesktopSpeechController } from "./DesktopSpeechController.ts";
 
-function makeController(maxRecordingMs?: number) {
-  const events: unknown[] = [];
-  let modelReady = false;
+function makeController(
+  options: { configured?: boolean; maxRecordingMs?: number; transcript?: string } = {},
+) {
+  const events: DesktopSpeechEvent[] = [];
+  let onFrame: ((frame: Int16Array) => void) | undefined;
   const capture = {
     start: vi.fn(),
-    stop: vi.fn().mockResolvedValue(new Float32Array([0.25, -0.25])),
+    stop: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
   };
   const backend = {
-    prepare: vi.fn().mockResolvedValue(undefined),
-    transcribe: vi.fn().mockResolvedValue("hello from speech"),
+    begin: vi.fn().mockResolvedValue(undefined),
+    push: vi.fn(),
+    finish: vi.fn().mockResolvedValue(options.transcript ?? "hello there"),
     dispose: vi.fn().mockResolvedValue(undefined),
   };
-  const downloadModel = vi.fn().mockImplementation(async (onProgress) => {
-    onProgress(5, 10);
-    modelReady = true;
-    return "/tmp/model.gguf";
-  });
   const controller = new DesktopSpeechController({
     supported: true,
-    modelPath: "/tmp/model.gguf",
-    modelReady: vi.fn().mockImplementation(async () => modelReady),
-    downloadModel,
-    removeModel: vi.fn().mockResolvedValue(undefined),
-    createCapture: () => capture,
+    configured: () => options.configured ?? true,
+    createCapture: (frameSink) => {
+      onFrame = frameSink;
+      return capture;
+    },
     createBackend: () => backend,
     emit: (event) => events.push(event),
-    ...(maxRecordingMs === undefined ? {} : { maxRecordingMs }),
+    ...(options.maxRecordingMs === undefined ? {} : { maxRecordingMs: options.maxRecordingMs }),
   });
-  return { controller, capture, backend, downloadModel, events };
+  return { controller, capture, backend, events, frame: (f: Int16Array) => onFrame?.(f) };
 }
 
 describe("DesktopSpeechController", () => {
-  it("downloads, records, transcribes, and emits the final transcript", async () => {
+  it("records, streams, and emits the final transcript", async () => {
     const { controller, capture, backend, events } = makeController();
 
     expect(await controller.start()).toMatchObject({ supported: true, state: "recording" });
     expect(await controller.stop()).toMatchObject({ supported: true, state: "ready" });
 
     expect(capture.start).toHaveBeenCalledOnce();
-    expect(backend.prepare).toHaveBeenCalledOnce();
-    expect(backend.transcribe).toHaveBeenCalledWith(new Float32Array([0.25, -0.25]));
-    expect(events).toContainEqual({ type: "download-progress", downloaded: 5, total: 10 });
-    expect(events).toContainEqual({ type: "transcript", text: "hello from speech" });
+    expect(backend.begin).toHaveBeenCalledOnce();
+    expect(backend.finish).toHaveBeenCalledOnce();
+    expect(backend.dispose).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({ type: "transcript", text: "hello there" });
   });
 
-  it("cancels recording without transcribing", async () => {
-    const { controller, capture, backend, events } = makeController();
+  it("opens the socket before capture starts so setup is off the critical path", async () => {
+    const order: string[] = [];
+    const { controller, capture, backend } = makeController();
+    backend.begin.mockImplementation(async () => void order.push("begin"));
+    capture.start.mockImplementation(() => void order.push("capture"));
 
     await controller.start();
+
+    expect(order).toEqual(["begin", "capture"]);
+  });
+
+  it("streams captured frames straight to the backend", async () => {
+    const { controller, backend, frame } = makeController();
+    await controller.start();
+
+    frame(Int16Array.from([1, 2, 3]));
+    frame(Int16Array.from([4, 5, 6]));
+
+    expect(backend.push).toHaveBeenCalledTimes(2);
+    expect(backend.push).toHaveBeenLastCalledWith(Int16Array.from([4, 5, 6]));
+  });
+
+  it("stays unconfigured and never opens a socket without an API key", async () => {
+    const { controller, backend, capture } = makeController({ configured: false });
+
+    expect(await controller.start()).toMatchObject({ supported: true, state: "unconfigured" });
+    expect(backend.begin).not.toHaveBeenCalled();
+    expect(capture.start).not.toHaveBeenCalled();
+  });
+
+  it("discards the transcript when cancelled", async () => {
+    const { controller, capture, events } = makeController();
+    await controller.start();
+
     expect(await controller.cancel()).toMatchObject({ supported: true, state: "ready" });
 
     expect(capture.cancel).toHaveBeenCalledOnce();
-    expect(backend.transcribe).not.toHaveBeenCalled();
-    expect(events.some((event) => (event as { type?: string }).type === "transcript")).toBe(false);
+    expect(events.some((event) => event.type === "transcript")).toBe(false);
   });
 
-  it("keeps the active recording when start is requested twice", async () => {
-    const { controller, capture, events } = makeController();
+  it("suppresses an empty transcript rather than inserting nothing", async () => {
+    const { controller, events } = makeController({ transcript: "   " });
     await controller.start();
-    expect(await controller.start()).toMatchObject({ supported: true, state: "recording" });
-    expect(capture.start).toHaveBeenCalledOnce();
-    expect(events.some((event) => (event as { type?: string }).type === "error")).toBe(false);
-    await controller.cancel();
+    await controller.stop();
+
+    expect(events.some((event) => event.type === "transcript")).toBe(false);
   });
 
-  it("automatically stops a recording at the duration limit", async () => {
-    const { controller, backend } = makeController(1);
-    await controller.start();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(backend.transcribe).toHaveBeenCalledOnce();
-  });
-
-  it("suppresses a transcript when cancellation arrives during stop", async () => {
+  it("reports a backend failure as an error state", async () => {
     const { controller, backend, events } = makeController();
-    let resolveTranscription!: (text: string) => void;
-    backend.transcribe.mockImplementation(
-      () => new Promise<string>((resolve) => (resolveTranscription = resolve)),
-    );
+    backend.finish.mockRejectedValue(new Error("Deepgram closed the connection"));
     await controller.start();
 
-    const stopping = controller.stop();
-    await vi.waitFor(() => expect(backend.transcribe).toHaveBeenCalledOnce());
-    const cancelling = controller.cancel();
-    resolveTranscription("discard this text");
-    await Promise.all([stopping, cancelling]);
-
-    expect(events).not.toContainEqual({ type: "transcript", text: "discard this text" });
-  });
-
-  it("does not open the microphone when cancelled during model download", async () => {
-    const { controller, capture, downloadModel } = makeController();
-    let finishDownload!: (path: string) => void;
-    downloadModel.mockImplementation(
-      () => new Promise<string>((resolve) => (finishDownload = resolve)),
-    );
-
-    const starting = controller.start();
-    await vi.waitFor(() => expect(downloadModel).toHaveBeenCalledOnce());
-    const cancelling = controller.cancel();
-    finishDownload("/tmp/model.gguf");
-    await Promise.all([starting, cancelling]);
-
-    expect(capture.start).not.toHaveBeenCalled();
+    expect(await controller.stop()).toMatchObject({ supported: true, state: "error" });
+    expect(events).toContainEqual({
+      type: "error",
+      message: "Deepgram closed the connection",
+    });
   });
 });

@@ -169,7 +169,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     start: () => ipcRenderer.invoke(IpcChannels.SPEECH_START_CHANNEL),
     stop: () => ipcRenderer.invoke(IpcChannels.SPEECH_STOP_CHANNEL),
     cancel: () => ipcRenderer.invoke(IpcChannels.SPEECH_CANCEL_CHANNEL),
-    removeModel: () => ipcRenderer.invoke(IpcChannels.SPEECH_REMOVE_MODEL_CHANNEL),
     onEvent: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, speechEvent: unknown) => {
         if (typeof speechEvent !== "object" || speechEvent === null) return;

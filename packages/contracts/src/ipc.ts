@@ -1158,7 +1158,6 @@ export interface DesktopBridge {
     start: () => Promise<DesktopSpeechStatus>;
     stop: () => Promise<DesktopSpeechStatus>;
     cancel: () => Promise<DesktopSpeechStatus>;
-    removeModel: () => Promise<DesktopSpeechStatus>;
     onEvent: (listener: (event: DesktopSpeechEvent) => void) => () => void;
   };
   /**

@@ -112,8 +112,8 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "local-voice-input",
-    title: "Local voice input",
+    id: "voice-input",
+    title: "Voice input",
     to: "/settings/general",
     desktopOnly: true,
   },

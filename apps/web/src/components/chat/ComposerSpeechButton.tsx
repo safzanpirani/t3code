@@ -9,7 +9,6 @@ import { useMediaQuery } from "~/hooks/useMediaQuery";
 
 export function ComposerSpeechButton(props: {
   status: DesktopSpeechStatus | null;
-  progress: { downloaded: number; total: number } | null;
   level: number;
   disabled?: boolean;
   onStart(): void;
@@ -18,16 +17,16 @@ export function ComposerSpeechButton(props: {
 }) {
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   if (props.status?.supported === false) return null;
-  const state = props.status?.supported ? props.status.state : "missing-model";
+  const state = props.status?.supported ? props.status.state : "unconfigured";
   const recording = state === "recording";
-  const busy = state === "downloading" || state === "transcribing";
-  const inactive = !recording && (props.disabled || busy);
+  const busy = state === "transcribing";
+  const inactive = !recording && (props.disabled || busy || state === "unconfigured");
   const label = recording
     ? "Stop and transcribe"
-    : state === "downloading"
-      ? `Downloading speech model${props.progress ? ` ${Math.round((props.progress.downloaded / Math.max(1, props.progress.total)) * 100)}%` : ""}`
-      : state === "transcribing"
-        ? "Transcribing voice input"
+    : state === "transcribing"
+      ? "Transcribing voice input"
+      : state === "unconfigured"
+        ? "Set a Deepgram API key in Settings to use voice input"
         : state === "error"
           ? (props.status?.message ?? "Voice input failed")
           : "Start voice input";

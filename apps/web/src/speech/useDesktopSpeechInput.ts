@@ -1,14 +1,13 @@
 import type { DesktopSpeechStatus } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ensureLocalApi } from "../localApi";
 import { toastManager } from "../components/ui/toast";
 
 export function useDesktopSpeechInput(onTranscript: (text: string) => void, ownerKey: string) {
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge?.speech;
   const [status, setStatus] = useState<DesktopSpeechStatus | null>(null);
-  const [progress, setProgress] = useState<{ downloaded: number; total: number } | null>(null);
   const [level, setLevel] = useState(0);
+  const [partial, setPartial] = useState("");
   const activeRef = useRef(false);
   const transcriptRef = useRef(onTranscript);
   const currentOwnerRef = useRef(ownerKey);
@@ -26,11 +25,12 @@ export function useDesktopSpeechInput(onTranscript: (text: string) => void, owne
       if (event.type === "status") {
         setStatus(event.status);
         activeRef.current = event.status.supported && event.status.state === "recording";
-      } else if (event.type === "download-progress") {
-        setProgress({ downloaded: event.downloaded, total: event.total });
+      } else if (event.type === "partial") {
+        setPartial(event.text);
       } else if (event.type === "level") {
         setLevel(event.level);
       } else if (event.type === "transcript") {
+        setPartial("");
         if (recordingOwnerRef.current === currentOwnerRef.current) {
           transcriptRef.current(event.text);
         } else {
@@ -42,6 +42,7 @@ export function useDesktopSpeechInput(onTranscript: (text: string) => void, owne
         }
         recordingOwnerRef.current = null;
       } else if (event.type === "error") {
+        setPartial("");
         setStatus({ supported: true, state: "error", message: event.message });
       }
     });
@@ -79,18 +80,12 @@ export function useDesktopSpeechInput(onTranscript: (text: string) => void, owne
 
   const start = useCallback(async () => {
     if (!bridge) return;
-    if (!status || (status.supported && status.state === "missing-model")) {
-      const confirmed = await ensureLocalApi().dialogs.confirm(
-        "Download a 48 MiB English speech model? Voice input is processed locally and microphone audio is not saved.",
-      );
-      if (!confirmed) return;
-    }
-    setProgress(null);
+    setPartial("");
     recordingOwnerRef.current = ownerKey;
     const next = await bridge.start();
     activeRef.current = next.supported && next.state === "recording";
     setStatus(next);
-  }, [bridge, ownerKey, status]);
+  }, [bridge, ownerKey]);
 
   const stop = useCallback(async () => {
     if (!bridge) return;
@@ -109,8 +104,8 @@ export function useDesktopSpeechInput(onTranscript: (text: string) => void, owne
   return {
     available: bridge !== undefined && status?.supported !== false,
     status,
-    progress,
     level,
+    partial,
     start,
     stop,
     cancel,

@@ -52,13 +52,3 @@ export const cancelSpeech = DesktopIpc.makeIpcMethod({
     return yield* speech.cancel;
   }),
 });
-
-export const removeSpeechModelMethod = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.SPEECH_REMOVE_MODEL_CHANNEL,
-  payload: Schema.Void,
-  result: DesktopSpeechStatusSchema,
-  handler: Effect.fn("desktop.ipc.speech.removeModel")(function* () {
-    const speech = yield* DesktopSpeech.DesktopSpeech;
-    return yield* speech.removeModel;
-  }),
-});

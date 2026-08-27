@@ -27,11 +27,12 @@
     "electron-updater": "^6.6.2",
     "playwright-core": "1.60.0",
     "react-grab": "^0.1.32",
-    "transcribe-cpp": "0.2.1"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "@types/ws": "^8.5.13",
     "cross-env": "^10.1.0",
     "electron-builder": "26.15.6",
     "tailwindcss": "^4.0.0",

@@ -2,8 +2,8 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt } from "./baseSchemas.ts";
 
 export const DesktopSpeechStateSchema = Schema.Literals([
-  "missing-model",
-  "downloading",
+  // No API key configured yet; the UI points at settings instead of the mic.
+  "unconfigured",
   "ready",
   "recording",
   "transcribing",
@@ -30,14 +30,16 @@ export const DesktopSpeechEventSchema = Schema.Union([
     status: DesktopSpeechStatusSchema,
   }),
   Schema.Struct({
-    type: Schema.Literal("download-progress"),
-    downloaded: NonNegativeInt,
-    total: NonNegativeInt,
-  }),
-  Schema.Struct({
     type: Schema.Literal("level"),
     level: Schema.Number,
     elapsedMs: NonNegativeInt,
+  }),
+  // Flux reports a running transcript for the current turn before it ends. This
+  // is preview text only: it is replaced wholesale by the next partial and by
+  // the final transcript, so it must never be inserted into the composer.
+  Schema.Struct({
+    type: Schema.Literal("partial"),
+    text: Schema.String,
   }),
   Schema.Struct({
     type: Schema.Literal("transcript"),

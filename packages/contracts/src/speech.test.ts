@@ -14,13 +14,30 @@ describe("desktop speech contracts", () => {
     });
   });
 
-  it("rejects negative model progress", () => {
-    expect(() =>
-      decodeEvent({
-        type: "download-progress",
-        downloaded: -1,
-        total: 10,
-      }),
-    ).toThrow();
+  it("accepts the unconfigured state used before an API key is set", () => {
+    expect(decodeStatus({ supported: true, state: "unconfigured" })).toEqual({
+      supported: true,
+      state: "unconfigured",
+    });
+  });
+
+  it("rejects states left behind by the local-model implementation", () => {
+    expect(() => decodeStatus({ supported: true, state: "missing-model" })).toThrow();
+    expect(() => decodeStatus({ supported: true, state: "downloading" })).toThrow();
+  });
+
+  it("carries partial and final transcripts as distinct events", () => {
+    expect(decodeEvent({ type: "partial", text: "hello" })).toEqual({
+      type: "partial",
+      text: "hello",
+    });
+    expect(decodeEvent({ type: "transcript", text: "hello there" })).toEqual({
+      type: "transcript",
+      text: "hello there",
+    });
+  });
+
+  it("rejects a negative elapsed time on a level event", () => {
+    expect(() => decodeEvent({ type: "level", level: 0.5, elapsedMs: -1 })).toThrow();
   });
 });

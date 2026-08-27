@@ -1921,31 +1921,16 @@ export function GeneralSettingsPanel() {
       <SettingsSection title="General">
         {window.desktopBridge?.speech && speechStatus?.supported ? (
           <SettingsRow
-            {...searchableSetting("local-voice-input")}
+            {...searchableSetting("voice-input")}
             description={
-              speechStatus.state === "missing-model"
-                ? "Downloads a 48 MiB English model on first use. Audio stays on this device."
-                : "Moonshine Streaming Tiny is stored locally. Microphone audio is not saved."
+              speechStatus.state === "unconfigured"
+                ? "Set T3CODE_DEEPGRAM_API_KEY in the environment to enable voice input."
+                : "Speech is streamed to Deepgram Flux and transcribed as you speak."
             }
             control={
-              speechStatus.state === "missing-model" ? (
-                <span className="text-xs text-muted-foreground">Download on first use</span>
-              ) : (
-                <Button
-                  variant="destructive-outline"
-                  size="sm"
-                  disabled={
-                    speechStatus.state === "recording" ||
-                    speechStatus.state === "transcribing" ||
-                    speechStatus.state === "downloading"
-                  }
-                  onClick={() =>
-                    void window.desktopBridge?.speech?.removeModel().then(setSpeechStatus)
-                  }
-                >
-                  Remove model
-                </Button>
-              )
+              <span className="text-xs text-muted-foreground">
+                {speechStatus.state === "unconfigured" ? "No API key" : "Deepgram Flux"}
+              </span>
             }
           />
         ) : null}
