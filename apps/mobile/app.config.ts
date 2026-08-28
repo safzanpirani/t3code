@@ -298,12 +298,18 @@ const config: ExpoConfig = {
       "expo-camera",
       {
         cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
-        microphonePermission: false,
+        microphonePermission: "Allow T3 Code to use the microphone so you can dictate messages.",
         barcodeScannerEnabled: true,
-        recordAudioAndroid: false,
+        // Voice input needs RECORD_AUDIO. When this is false the plugin emits
+        // `<uses-permission ... tools:node="remove"/>`, which strips the
+        // permission from the merged manifest and silently overrides the
+        // android.permissions list below.
+        recordAudioAndroid: true,
       },
     ],
-    ["expo-image-picker", { photosPermission: false, microphonePermission: false }],
+    // microphonePermission stays unset: setting it false makes the plugin strip
+    // RECORD_AUDIO from the merged manifest, which voice input needs.
+    ["expo-image-picker", { photosPermission: false }],
     [
       "expo-splash-screen",
       {

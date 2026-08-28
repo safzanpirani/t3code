@@ -34,55 +34,55 @@ class T3SpeechModule : Module() {
 
     Events("onAudio", "onLevel", "onError")
 
-    Function("isAvailable") {
-      val context = appContext.reactContext ?: return@Function false
-      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-    }
+    Function("isAvailable") { hasMicrophonePermission() }
 
-    Function("start") {
-      if (running) return@Function
-      val context = appContext.reactContext ?: throw IllegalStateException("no android context")
-      if (
-        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
-          PackageManager.PERMISSION_GRANTED
-      ) {
-        throw IllegalStateException("microphone permission was not granted")
-      }
-
-      val minBuffer =
-        AudioRecord.getMinBufferSize(
-          SAMPLE_RATE,
-          AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT,
-        )
-      if (minBuffer <= 0) throw IllegalStateException("this device cannot record 16 kHz mono PCM")
-
-      // VOICE_RECOGNITION asks the platform for the un-beautified capture path:
-      // no automatic gain ramping or aggressive noise suppression, which a
-      // speech model reads better than the "communication" preset.
-      val record =
-        AudioRecord(
-          MediaRecorder.AudioSource.VOICE_RECOGNITION,
-          SAMPLE_RATE,
-          AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT,
-          maxOf(minBuffer, FRAME_SAMPLES * 2 * 4),
-        )
-      if (record.state != AudioRecord.STATE_INITIALIZED) {
-        record.release()
-        throw IllegalStateException("the microphone could not be opened")
-      }
-
-      recorder = record
-      running = true
-      record.startRecording()
-      worker = thread(name = "t3-speech-capture") { pump(record) }
-    }
+    Function("start") { startCapture() }
 
     AsyncFunction("stop") { stopCapture() }
 
     OnDestroy { stopCapture() }
+  }
+
+  private fun hasMicrophonePermission(): Boolean {
+    val context = appContext.reactContext ?: return false
+    return ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+      PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun startCapture() {
+    if (running) return
+    if (!hasMicrophonePermission()) {
+      throw IllegalStateException("microphone permission was not granted")
+    }
+
+    val minBuffer =
+      AudioRecord.getMinBufferSize(
+        SAMPLE_RATE,
+        AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT,
+      )
+    if (minBuffer <= 0) throw IllegalStateException("this device cannot record 16 kHz mono PCM")
+
+    // VOICE_RECOGNITION asks the platform for the un-beautified capture path:
+    // no automatic gain ramping or aggressive noise suppression, which a
+    // speech model reads better than the "communication" preset.
+    val record =
+      AudioRecord(
+        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+        SAMPLE_RATE,
+        AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT,
+        maxOf(minBuffer, FRAME_SAMPLES * 2 * 4),
+      )
+    if (record.state != AudioRecord.STATE_INITIALIZED) {
+      record.release()
+      throw IllegalStateException("the microphone could not be opened")
+    }
+
+    recorder = record
+    running = true
+    record.startRecording()
+    worker = thread(name = "t3-speech-capture") { pump(record) }
   }
 
   private fun pump(record: AudioRecord) {
