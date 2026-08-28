@@ -3,7 +3,10 @@ const FLUX_URL = "wss://api.deepgram.com/v2/listen";
 export const SAMPLE_RATE = 16_000;
 const MAX_KEYTERMS = 100;
 const CONNECT_TIMEOUT_MS = 10_000;
-const FINALIZE_TIMEOUT_MS = 15_000;
+// The EndOfTurn that answers CloseStream arrives in well under a second. This
+// is only the backstop for a server that never answers, and it is a dead wait
+// the user sits through, so it stays short.
+const FINALIZE_TIMEOUT_MS = 5_000;
 
 export function buildFluxUrl(keyterms: ReadonlyArray<string> = []): string {
   const params = new URLSearchParams();

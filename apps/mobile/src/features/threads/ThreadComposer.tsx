@@ -549,17 +549,42 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
   // Voice input appends to whatever is already drafted rather than replacing
-  // it, so dictating after typing does not discard the typed text.
+  // it, so dictating after typing does not discard the typed text. The draft as
+  // it stood when recording began is captured once, because the live preview
+  // below rewrites the draft on every partial -- composing against the current
+  // draft instead would append each partial to the previous one.
+  const voiceBaseDraftRef = useRef("");
+  const composeWithVoiceText = useCallback((base: string, text: string) => {
+    const trimmedBase = base.trimEnd();
+    return trimmedBase.length > 0 ? `${trimmedBase} ${text}` : text;
+  }, []);
   const voice = useVoiceInput(
     useCallback(
       (text: string) => {
-        onChangeDraftMessage(
-          draftMessage.trim().length > 0 ? `${draftMessage.trimEnd()} ${text}` : text,
-        );
+        onChangeDraftMessage(composeWithVoiceText(voiceBaseDraftRef.current, text));
       },
-      [draftMessage, onChangeDraftMessage],
+      [composeWithVoiceText, onChangeDraftMessage],
     ),
   );
+
+  // Words land in the input as they are recognised rather than all at once at
+  // the end, which is the whole point of a streaming model.
+  const voicePartial = voice.partial;
+  const voiceIsRecording = voice.state === "recording";
+  useEffect(() => {
+    if (!voiceIsRecording) return;
+    onChangeDraftMessage(composeWithVoiceText(voiceBaseDraftRef.current, voicePartial));
+  }, [composeWithVoiceText, onChangeDraftMessage, voiceIsRecording, voicePartial]);
+
+  const startVoiceInput = useCallback(() => {
+    voiceBaseDraftRef.current = draftMessage;
+    void voice.start();
+  }, [draftMessage, voice]);
+
+  const cancelVoiceInput = useCallback(() => {
+    onChangeDraftMessage(voiceBaseDraftRef.current);
+    void voice.cancel();
+  }, [onChangeDraftMessage, voice]);
 
   const handleSend = useCallback(async () => {
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
@@ -806,6 +831,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </Animated.View>
           ) : null}
 
+          {voice.state === "error" && voice.message ? (
+            <View className="px-2 pb-1">
+              <Text className="text-xs text-rose-600 dark:text-rose-400" numberOfLines={2}>
+                {voice.message}
+              </Text>
+            </View>
+          ) : null}
+
           <View className={isExpanded ? undefined : "min-w-0 flex-1"}>
             <ComposerEditor
               ref={inputRef}
@@ -904,14 +937,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   <ComposerToolbarButton
                     accessibilityLabel={
                       voice.state === "recording"
-                        ? "Stop and transcribe"
+                        ? "Stop and transcribe. Long press to discard."
                         : voice.state === "transcribing"
-                          ? "Transcribing"
+                          ? "Transcribing. Tap to discard."
                           : voice.state === "unconfigured"
                             ? "Voice input needs a Deepgram API key"
                             : "Start voice input"
                     }
-                    icon={voice.state === "recording" ? "stop.fill" : "mic.fill"}
+                    icon={
+                      voice.state === "recording"
+                        ? "stop.fill"
+                        : voice.state === "transcribing"
+                          ? "xmark"
+                          : "mic.fill"
+                    }
                     variant={
                       voice.state === "recording"
                         ? "danger"
@@ -919,11 +958,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                           ? "danger"
                           : undefined
                     }
-                    disabled={voice.state === "unconfigured" || voice.state === "transcribing"}
+                    // Never disabled while a recording is in flight: a stuck
+                    // transcribe left the button greyed out with no way back.
+                    disabled={voice.state === "unconfigured"}
                     onPress={() => {
                       if (voice.state === "recording") void voice.stop();
-                      else void voice.start();
+                      else if (voice.state === "transcribing") cancelVoiceInput();
+                      else startVoiceInput();
                     }}
+                    onLongPress={voice.state === "recording" ? cancelVoiceInput : undefined}
                     showChevron={false}
                   />
                 ) : null}
