@@ -477,6 +477,62 @@ describe("buildThreadFeed", () => {
     expect(group.activities[0]?.getFullDetail()).toContain("repository.search");
   });
 
+  it("carries the tool-call file diff onto the activity so the feed can render it inline", () => {
+    const turnId = TurnId.make("turn-file-change");
+    const patch = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,2 +1,2 @@",
+      " const a = 1;",
+      "-const b = 2;",
+      "+const b = 3;",
+    ].join("\n");
+    const thread = makeThread({
+      id: ThreadId.make("thread-file-change"),
+      projectId: ProjectId.make("project-file-change"),
+      title: "File change",
+      activities: [
+        makeActivity({
+          id: EventId.make("edit-completed"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Edit file",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId,
+          payload: {
+            title: "Edit",
+            itemType: "file_change",
+            status: "completed",
+            data: {
+              fileChange: {
+                path: "/repo/src/app.ts",
+                patch,
+                truncated: true,
+              },
+            },
+          },
+        }),
+      ],
+    });
+
+    const group = buildThreadFeed(thread)[0];
+    expect(group).toMatchObject({ type: "activity-group" });
+    if (!group || group.type !== "activity-group") {
+      return;
+    }
+
+    const activity = group.activities[0];
+    expect(activity?.icon).toBe("edit");
+    expect(activity?.canExpand).toBe(true);
+    expect(activity?.fileChange).toMatchObject({
+      path: "/repo/src/app.ts",
+      patch,
+      truncated: true,
+    });
+    expect(activity?.fileChange?.approximate).toBeUndefined();
+  });
+
   it("defers large tool output expansion until a work row is opened or copied", () => {
     let serializedToolOutputs = 0;
     const activities = Array.from({ length: 5_000 }, (_, index) =>

@@ -41,6 +41,19 @@ export interface PendingUserInputDraftAnswer {
   readonly customAnswer?: string;
 }
 
+export interface WorkLogFileChange {
+  /** Absolute path as reported by the tool. */
+  readonly path: string;
+  /** Every changed path when one tool call updates multiple files. */
+  readonly paths?: ReadonlyArray<string>;
+  /** Unified diff including its `diff --git` header. */
+  readonly patch: string;
+  /** The patch body was clipped to a size cap. */
+  readonly truncated?: boolean;
+  /** Hunk line numbers were inferred, not reported by the provider. */
+  readonly approximate?: boolean;
+}
+
 export interface ThreadFeedActivity {
   readonly id: string;
   readonly createdAt: string;
@@ -65,6 +78,8 @@ export interface ThreadFeedActivity {
     | "zap";
   readonly toolLike: boolean;
   readonly status: "success" | "failure" | "neutral" | null;
+  /** Inline unified diff for file edits; see {@link WorkLogFileChange}. */
+  readonly fileChange?: WorkLogFileChange;
 }
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -80,6 +95,7 @@ interface WorkLogEntry {
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
+  fileChange?: WorkLogFileChange;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
@@ -436,6 +452,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (changedFiles.length > 0) {
     entry.changedFiles = changedFiles;
   }
+  const fileChange = extractFileChange(payload);
+  if (fileChange) {
+    entry.fileChange = fileChange;
+  }
   if (title) {
     entry.toolTitle = title;
   }
@@ -528,6 +548,7 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  const fileChange = next.fileChange ?? previous.fileChange;
   return {
     ...previous,
     ...next,
@@ -541,6 +562,7 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolLifecycleStatus ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(fileChange ? { fileChange } : {}),
   };
 }
 
@@ -658,7 +680,12 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
   if (entry.itemType === "command_execution" || entry.command) return "command";
-  if (entry.itemType === "file_change" || (entry.changedFiles?.length ?? 0) > 0) return "edit";
+  if (
+    entry.fileChange !== undefined ||
+    entry.itemType === "file_change" ||
+    (entry.changedFiles?.length ?? 0) > 0
+  )
+    return "edit";
   if (entry.itemType === "web_search") return "globe";
   if (entry.itemType === "image_view") return "eye";
   if (entry.itemType === "mcp_tool_call") return "wrench";
@@ -694,6 +721,7 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
 
 function workEntryHasExpandedBody(entry: WorkLogEntry): boolean {
   return (
+    entry.fileChange !== undefined ||
     (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) ||
     Boolean((entry.rawCommand ?? entry.command)?.trim()) ||
     Boolean(entry.detail?.trim()) ||
@@ -1054,6 +1082,34 @@ function collectChangedFiles(value: unknown, target: string[], seen: Set<string>
       return;
     }
   }
+}
+
+function extractFileChange(payload: Record<string, unknown> | null): WorkLogFileChange | null {
+  const fileChange = asRecord(asRecord(payload?.data)?.fileChange);
+  if (!fileChange) {
+    return null;
+  }
+  const path = asTrimmedString(fileChange.path);
+  const patch = typeof fileChange.patch === "string" ? fileChange.patch : null;
+  if (!path || !patch || patch.trim().length === 0) {
+    return null;
+  }
+  const paths = Array.isArray(fileChange.paths)
+    ? [
+        ...new Set(
+          fileChange.paths
+            .map(asTrimmedString)
+            .filter((candidate): candidate is string => candidate !== null),
+        ),
+      ]
+    : [];
+  return {
+    path,
+    ...(paths.length > 1 ? { paths } : {}),
+    patch,
+    ...(fileChange.truncated === true ? { truncated: true } : {}),
+    ...(fileChange.approximate === true ? { approximate: true } : {}),
+  };
 }
 
 function extractChangedFiles(payload: Record<string, unknown> | null): string[] {
@@ -1609,6 +1665,7 @@ export function buildThreadFeed(
               icon: workEntryIcon(entry),
               toolLike: workLogEntryIsToolLike(entry),
               status: workEntryStatus(entry),
+              ...(entry.fileChange ? { fileChange: entry.fileChange } : {}),
             },
           };
         }),

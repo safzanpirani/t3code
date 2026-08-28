@@ -6,6 +6,7 @@ import { AppText as Text } from "../../components/AppText";
 import { scaledTypographyLineHeight } from "../../lib/appearancePreferences";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
+import { WorkLogFileDiff } from "./WorkLogFileDiff";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThemeColor } from "../../lib/useThemeColor";
 import Animated, { FadeIn } from "react-native-reanimated";
@@ -247,6 +248,12 @@ export function ThreadWorkLog(props: {
                   </View>
                 </View>
               </Pressable>
+
+              {expanded && row.fileChange ? (
+                <View className="ml-7 border-l border-neutral-300/60 pb-1.5 pl-3 pt-1 dark:border-white/[0.12]">
+                  <WorkLogFileDiff fileChange={row.fileChange} rowId={row.id} />
+                </View>
+              ) : null}
 
               {fullDetail ? (
                 <View className="ml-7 border-l border-neutral-300/60 pb-1 pl-3 pt-0.5 dark:border-white/[0.12]">
