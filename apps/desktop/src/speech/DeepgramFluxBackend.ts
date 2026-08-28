@@ -44,8 +44,6 @@ export function buildFluxUrl(apiKey: string, keyterms: ReadonlyArray<string> = [
   return url.toString();
 }
 
-type Turn = { readonly index: number; readonly text: string };
-
 /**
  * Streams microphone audio to Deepgram Flux and resolves the transcript once
  * the server confirms the final turn.
@@ -58,7 +56,6 @@ export class DeepgramFluxBackend {
   private readonly options: FluxBackendOptions;
   private socket: WebSocket | undefined;
   private readonly turns = new Map<number, string>();
-  private currentIndex = 0;
   private finalize: { resolve: (text: string) => void; reject: (error: Error) => void } | undefined;
   private finalizeTimer: ReturnType<typeof setTimeout> | undefined;
   private closing = false;
@@ -144,6 +141,16 @@ export class DeepgramFluxBackend {
     }
   }
 
+  /** Exposed for tests: feed one raw frame exactly as the socket would. */
+  handleFrame(json: string): void {
+    this.receive(Buffer.from(json, "utf8"));
+  }
+
+  /** Exposed for tests: the transcript assembled so far. */
+  get transcript(): string {
+    return this.collect();
+  }
+
   private receive(data: Buffer): void {
     let event: unknown;
     try {
@@ -152,7 +159,13 @@ export class DeepgramFluxBackend {
       return;
     }
     if (typeof event !== "object" || event === null) return;
-    const message = event as { type?: unknown; transcript?: unknown; description?: unknown };
+    const message = event as {
+      type?: unknown;
+      event?: unknown;
+      turn_index?: unknown;
+      transcript?: unknown;
+      description?: unknown;
+    };
 
     if (message.type === "Error") {
       const description =
@@ -161,21 +174,24 @@ export class DeepgramFluxBackend {
       return;
     }
 
-    const text = typeof message.transcript === "string" ? message.transcript : undefined;
+    // Flux only ever sends `type: "TurnInfo"`. The lifecycle lives in `event`
+    // (StartOfTurn | Update | EagerEndOfTurn | TurnResumed | EndOfTurn) -- there
+    // is no message whose type is "EndOfTurn".
+    if (message.type !== "TurnInfo") return;
 
-    if (message.type === "TurnInfo" && text !== undefined) {
-      this.turns.set(this.currentIndex, text);
-      this.options.onPartial?.(this.collect());
+    const index = typeof message.turn_index === "number" ? message.turn_index : 0;
+    const text = typeof message.transcript === "string" ? message.transcript.trim() : "";
+    // A bare StartOfTurn, or silence closing a turn, arrives with no text and
+    // must never erase what the turn already holds.
+    if (text.length > 0) this.turns.set(index, text);
+
+    if (message.event === "EndOfTurn") {
+      // The EndOfTurn that follows CloseStream is the one that completes the
+      // transcript; earlier ones just close a turn mid-dictation.
+      if (this.closing) this.settle(this.collect());
       return;
     }
-
-    if (message.type === "EndOfTurn") {
-      if (text !== undefined) this.turns.set(this.currentIndex, text);
-      this.currentIndex += 1;
-      // The EndOfTurn that follows CloseStream is the one that completes the
-      // transcript. Earlier ones just close a turn mid-dictation.
-      if (this.closing) this.settle(this.collect());
-    }
+    this.options.onPartial?.(this.collect());
   }
 
   private collect(): string {

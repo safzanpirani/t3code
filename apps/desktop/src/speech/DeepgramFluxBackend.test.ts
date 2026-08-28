@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { FLUX_MODEL, buildFluxUrl } from "./DeepgramFluxBackend.ts";
+import { DeepgramFluxBackend, FLUX_MODEL, buildFluxUrl } from "./DeepgramFluxBackend.ts";
 
 describe("buildFluxUrl", () => {
   it("targets the Flux endpoint with the multilingual model", () => {
@@ -50,5 +50,67 @@ describe("buildFluxUrl", () => {
 
   it("never puts the api key in the url", () => {
     expect(buildFluxUrl("super-secret-key")).not.toContain("super-secret-key");
+  });
+});
+
+describe("Flux frame handling", () => {
+  const session = () => new DeepgramFluxBackend({ apiKey: "k" });
+
+  it("accumulates a turn from TurnInfo frames", () => {
+    const s = session();
+    s.handleFrame(JSON.stringify({ type: "TurnInfo", event: "StartOfTurn", turn_index: 0 }));
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "Update", turn_index: 0, transcript: "hello" }),
+    );
+    s.handleFrame(
+      JSON.stringify({
+        type: "TurnInfo",
+        event: "Update",
+        turn_index: 0,
+        transcript: "hello there",
+      }),
+    );
+    expect(s.transcript).toBe("hello there");
+  });
+
+  it("never treats EndOfTurn as a message type", () => {
+    // Flux has no frame whose `type` is "EndOfTurn"; matching on type instead
+    // of event means the final turn never settles and dictation falls back to
+    // the failsafe timeout.
+    const s = session();
+    s.handleFrame(JSON.stringify({ type: "EndOfTurn", transcript: "ignored" }));
+    expect(s.transcript).toBe("");
+  });
+
+  it("keys turns by the server's turn_index, not arrival order", () => {
+    const s = session();
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 1, transcript: "second" }),
+    );
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 0, transcript: "first" }),
+    );
+    expect(s.transcript).toBe("first second");
+  });
+
+  it("does not let an empty frame erase text the turn already holds", () => {
+    const s = session();
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "Update", turn_index: 0, transcript: "kept" }),
+    );
+    s.handleFrame(JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 0 }));
+    expect(s.transcript).toBe("kept");
+  });
+
+  it("reports partials only while a turn is open", () => {
+    const seen: string[] = [];
+    const s = new DeepgramFluxBackend({ apiKey: "k", onPartial: (t) => seen.push(t) });
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "Update", turn_index: 0, transcript: "partial" }),
+    );
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 0, transcript: "final" }),
+    );
+    expect(seen).toEqual(["partial"]);
   });
 });

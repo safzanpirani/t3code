@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { FLUX_MODEL, SAMPLE_RATE, buildFluxUrl, decodeBase64 } from "./fluxClient";
+import { FLUX_MODEL, FluxSession, SAMPLE_RATE, buildFluxUrl, decodeBase64 } from "./fluxClient";
 
 describe("buildFluxUrl", () => {
   it("targets Flux with the multilingual model", () => {
@@ -56,5 +56,46 @@ describe("decodeBase64", () => {
 
   it("returns an empty buffer for empty input", () => {
     expect(decodeBase64("").length).toBe(0);
+  });
+});
+
+describe("Flux frame handling", () => {
+  const session = () => new FluxSession({ apiKey: "k" });
+
+  it("accumulates a turn from TurnInfo frames", () => {
+    const s = session();
+    s.handleFrame(JSON.stringify({ type: "TurnInfo", event: "StartOfTurn", turn_index: 0 }));
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "Update", turn_index: 0, transcript: "hello" }),
+    );
+    expect(s.transcript).toBe("hello");
+  });
+
+  it("never treats EndOfTurn as a message type", () => {
+    // Flux has no frame whose `type` is "EndOfTurn"; matching on type instead
+    // of event means the final turn never settles.
+    const s = session();
+    s.handleFrame(JSON.stringify({ type: "EndOfTurn", transcript: "ignored" }));
+    expect(s.transcript).toBe("");
+  });
+
+  it("keys turns by the server's turn_index, not arrival order", () => {
+    const s = session();
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 1, transcript: "second" }),
+    );
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 0, transcript: "first" }),
+    );
+    expect(s.transcript).toBe("first second");
+  });
+
+  it("does not let an empty frame erase text the turn already holds", () => {
+    const s = session();
+    s.handleFrame(
+      JSON.stringify({ type: "TurnInfo", event: "Update", turn_index: 0, transcript: "kept" }),
+    );
+    s.handleFrame(JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", turn_index: 0 }));
+    expect(s.transcript).toBe("kept");
   });
 });
