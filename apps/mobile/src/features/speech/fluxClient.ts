@@ -40,6 +40,46 @@ export function decodeBase64(input: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * Deepgram refuses a bad key by closing the upgrade, so the close code and
+ * reason are usually the only description of what went wrong.
+ */
+function connectFailureMessage(event: unknown): string {
+  const detail = event as { message?: unknown; code?: unknown; reason?: unknown };
+  const reason = typeof detail?.reason === "string" ? detail.reason.trim() : "";
+  const message = typeof detail?.message === "string" ? detail.message.trim() : "";
+  const code = typeof detail?.code === "number" ? detail.code : undefined;
+  const described = reason || message;
+  if (described && code !== undefined) return `could not reach Deepgram (${code}): ${described}`;
+  if (described) return `could not reach Deepgram: ${described}`;
+  if (code !== undefined) {
+    // 1006 is an abnormal close with no frame, which is what a rejected key
+    // looks like from the client side.
+    return code === 1006
+      ? "could not reach Deepgram: the connection was refused, which usually means the API key was rejected"
+      : `could not reach Deepgram (${code})`;
+  }
+  return "could not reach Deepgram";
+}
+
+/**
+ * React Native's WebSocket takes a third `options` argument carrying request
+ * headers. The DOM lib types shipped with TypeScript describe the browser
+ * constructor, which has no such parameter, so the runtime shape is declared
+ * here rather than dropped.
+ */
+type ReactNativeWebSocketConstructor = new (
+  url: string,
+  protocols: string | ReadonlyArray<string> | undefined,
+  options: { readonly headers: Readonly<Record<string, string>> },
+) => WebSocket;
+
+/** Resolved per connection rather than captured at import, so the constructor
+ * in effect at connect time is the one used. */
+function reactNativeWebSocket(): ReactNativeWebSocketConstructor {
+  return globalThis.WebSocket as unknown as ReactNativeWebSocketConstructor;
+}
+
 export type FluxSessionOptions = {
   readonly apiKey: string;
   readonly keyterms?: ReadonlyArray<string>;
@@ -49,8 +89,11 @@ export type FluxSessionOptions = {
 /**
  * Streams microphone audio to Deepgram Flux from React Native.
  *
- * React Native's WebSocket cannot set request headers, so the key is passed
- * with Deepgram's token subprotocol -- the same mechanism browsers use.
+ * Authentication uses the Authorization header, the same as the desktop
+ * backend. React Native's WebSocket accepts a headers option and forwards it to
+ * the platform client -- it is the *browser* that cannot set them, which is why
+ * the token subprotocol exists at all. Offering `token` as a subprotocol Flux
+ * never selects made the handshake fail outright ("could not reach Deepgram").
  */
 export class FluxSession {
   private readonly options: FluxSessionOptions;
@@ -68,10 +111,10 @@ export class FluxSession {
 
   async begin(): Promise<void> {
     if (this.socket) return;
-    const socket = new WebSocket(buildFluxUrl(this.options.keyterms), [
-      "token",
-      this.options.apiKey,
-    ]);
+    const Socket = reactNativeWebSocket();
+    const socket = new Socket(buildFluxUrl(this.options.keyterms), undefined, {
+      headers: { Authorization: `Token ${this.options.apiKey}` },
+    });
     socket.binaryType = "arraybuffer";
     this.socket = socket;
 
@@ -80,13 +123,19 @@ export class FluxSession {
         socket.close();
         reject(new Error("timed out connecting to Deepgram"));
       }, CONNECT_TIMEOUT_MS);
-      socket.onopen = () => {
+      const settle = (outcome: () => void) => {
         clearTimeout(timer);
-        resolve();
+        outcome();
       };
-      socket.onerror = () => {
-        clearTimeout(timer);
-        reject(new Error("could not reach Deepgram"));
+      socket.onopen = () => settle(resolve);
+      // Whatever the platform reports is the only clue to a rejected key or a
+      // blocked network, so it is carried through rather than flattened into a
+      // single unhelpful sentence.
+      socket.onerror = (event) => {
+        settle(() => reject(new Error(connectFailureMessage(event))));
+      };
+      socket.onclose = (event) => {
+        settle(() => reject(new Error(connectFailureMessage(event))));
       };
     });
 

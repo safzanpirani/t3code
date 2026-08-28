@@ -39,9 +39,77 @@ describe("buildFluxUrl", () => {
   });
 
   it("never puts the api key in the url", () => {
-    // React Native cannot set headers, so the key travels as a subprotocol --
-    // it must not leak into the query string as well.
+    // The key travels in the Authorization header; it must not leak into the
+    // query string, which lands in server logs.
     expect(buildFluxUrl()).not.toContain("token");
+  });
+});
+
+describe("connecting", () => {
+  class FakeSocket {
+    static last: FakeSocket | undefined;
+    readonly url: string;
+    readonly protocols: unknown;
+    readonly options: { readonly headers: Readonly<Record<string, string>> };
+    binaryType = "";
+    onopen: (() => void) | undefined;
+    onerror: ((event: unknown) => void) | undefined;
+    onclose: ((event: unknown) => void) | undefined;
+    onmessage: ((event: unknown) => void) | undefined;
+    closed = false;
+
+    constructor(
+      url: string,
+      protocols: unknown,
+      options: { readonly headers: Readonly<Record<string, string>> },
+    ) {
+      this.url = url;
+      this.protocols = protocols;
+      this.options = options;
+      FakeSocket.last = this;
+    }
+
+    close() {
+      this.closed = true;
+    }
+  }
+
+  const withFakeSocket = async (run: (session: FluxSession) => Promise<void>) => {
+    const original = globalThis.WebSocket;
+    // @ts-expect-error -- the fake stands in for the platform constructor.
+    globalThis.WebSocket = FakeSocket;
+    try {
+      await run(new FluxSession({ apiKey: "secret-key" }));
+    } finally {
+      globalThis.WebSocket = original;
+    }
+  };
+
+  it("authenticates with the Authorization header, not a subprotocol", async () => {
+    await withFakeSocket(async (session) => {
+      const begun = session.begin();
+      // Offering a subprotocol Flux never selects failed the handshake.
+      expect(FakeSocket.last?.protocols).toBeUndefined();
+      expect(FakeSocket.last?.options.headers.Authorization).toBe("Token secret-key");
+      FakeSocket.last?.onopen?.();
+      await begun;
+    });
+  });
+
+  it("reports the close code when the handshake is refused", async () => {
+    await withFakeSocket(async (session) => {
+      const begun = session.begin();
+      FakeSocket.last?.onclose?.({ code: 1006 });
+      await expect(begun).rejects.toThrow(/API key was rejected/);
+    });
+  });
+
+  it("carries the platform's own description through", async () => {
+    await withFakeSocket(async (session) => {
+      const begun = session.begin();
+      FakeSocket.last?.onerror?.({ message: "dns failure" });
+      await expect(begun).rejects.toThrow(/dns failure/);
+    });
   });
 });
 
