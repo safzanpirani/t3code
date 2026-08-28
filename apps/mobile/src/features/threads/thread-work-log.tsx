@@ -81,6 +81,12 @@ function isFreshRow(createdAt: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ROW_WINDOW_MS;
 }
 
+// Inline file diffs open by default, matching the desktop timeline: a diff the
+// reader has to hunt for is a diff they will not read.
+export function workRowDefaultExpanded(activity: ThreadFeedActivity): boolean {
+  return activity.fileChange !== undefined;
+}
+
 // Tool-like activities with a neutral status carry no signal worth a row.
 export function visibleWorkLogActivities(
   activities: ReadonlyArray<ThreadFeedActivity>,
@@ -127,7 +133,7 @@ export function ThreadWorkLog(props: {
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly onCopyRow: (rowId: string, value: string) => void;
-  readonly onToggleRow: (rowId: string) => void;
+  readonly onToggleRow: (rowId: string, nextExpanded: boolean) => void;
 }) {
   const pressedBackground = useThemeColor("--color-subtle");
   const rows = visibleWorkLogActivities(props.activities).map((activity) => ({
@@ -151,7 +157,7 @@ export function ThreadWorkLog(props: {
 
       <View className="gap-px">
         {rows.map((row) => {
-          const expanded = props.expandedRows[row.id] ?? false;
+          const expanded = props.expandedRows[row.id] ?? workRowDefaultExpanded(row);
           const canExpand = row.canExpand;
           const fullDetail = expanded ? row.getFullDetail() : null;
           const displayText = row.detail ? `${row.summary} ${row.detail}` : row.summary;
@@ -175,7 +181,7 @@ export function ThreadWorkLog(props: {
                 onPress={() => {
                   if (canExpand) {
                     triggerDisclosureFeedback();
-                    props.onToggleRow(row.id);
+                    props.onToggleRow(row.id, !expanded);
                   }
                 }}
                 onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}

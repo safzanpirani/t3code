@@ -105,6 +105,7 @@ import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
   ThreadWorkLog,
+  workRowDefaultExpanded,
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
@@ -981,7 +982,7 @@ function renderFeedEntry(
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
-    readonly onToggleWorkRow: (rowId: string) => void;
+    readonly onToggleWorkRow: (rowId: string, nextExpanded: boolean) => void;
     readonly onToggleTurnFold: (turnId: TurnId) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
@@ -1945,14 +1946,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleWorkRow = useCallback(
-    (rowId: string) => {
+    (rowId: string, nextExpanded: boolean) => {
       suspendEndScrollMaintenanceForDisclosure(rowId);
       setInteractionState((current) => ({
         ...current,
-        expandedWorkRows: {
-          ...current.expandedWorkRows,
-          [rowId]: !(current.expandedWorkRows[rowId] ?? false),
-        },
+        expandedWorkRows: { ...current.expandedWorkRows, [rowId]: nextExpanded },
       }));
     },
     [suspendEndScrollMaintenanceForDisclosure],
@@ -2000,7 +1998,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         case "activity-group":
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
-          return entry.activities.some((activity) => expandedWorkRows[activity.id])
+          return entry.activities.some(
+            (activity) => expandedWorkRows[activity.id] ?? workRowDefaultExpanded(activity),
+          )
             ? undefined
             : collapsedWorkLogHeight(entry.activities, appearance.baseFontSize);
         default:
