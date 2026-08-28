@@ -671,6 +671,7 @@ function AppSettingsSection() {
 
   return (
     <SettingsSection title="App">
+      <SettingsRow icon="mic.fill" label="Voice Input" target="SettingsVoice" />
       <SettingsRow icon="internaldrive" label="Client Storage" target="SettingsClientStorage" />
       <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
       {updateCheckAvailable ? (

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 
 import { FluxSession, decodeBase64 } from "./fluxClient";
-import { deepgramApiKey } from "./deepgramKey";
+import { useDeepgramApiKey } from "./deepgramKeyStore";
 import { nativeSpeech } from "./nativeSpeech";
 
 export type VoiceInputState =
@@ -31,7 +31,7 @@ async function ensureMicrophonePermission(): Promise<boolean> {
  * once the server confirms the turn ended.
  */
 export function useVoiceInput(onTranscript: (text: string) => void) {
-  const apiKey = deepgramApiKey();
+  const { key: apiKey, loading: keyLoading } = useDeepgramApiKey();
   const supported = Platform.OS === "android" && nativeSpeech !== null;
   const [state, setState] = useState<VoiceInputState>(
     !supported ? "unavailable" : apiKey ? "ready" : "unconfigured",
@@ -42,6 +42,21 @@ export function useVoiceInput(onTranscript: (text: string) => void) {
   const sessionRef = useRef<FluxSession | undefined>(undefined);
   const transcriptRef = useRef(onTranscript);
   transcriptRef.current = onTranscript;
+
+  // The saved key arrives asynchronously and can change while the composer is
+  // mounted (the user pastes one in settings), so readiness follows it instead
+  // of being decided once at mount. Idle states only: this must not interrupt a
+  // recording in progress.
+  useEffect(() => {
+    if (!supported || keyLoading) return;
+    setState((current) =>
+      current === "ready" || current === "unconfigured"
+        ? apiKey
+          ? "ready"
+          : "unconfigured"
+        : current,
+    );
+  }, [apiKey, keyLoading, supported]);
 
   const teardown = useCallback(async () => {
     await nativeSpeech?.stop().catch(() => undefined);
